@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # PostgreSQL connection URL (postgresql+psycopg://...)
     DATABASE_URL: str
 
+    # Gemini API key — optional; agents degrade gracefully when absent
+    GEMINI_API_KEY: str | None = None
+
     model_config = SettingsConfigDict(
         # Look for a .env file in the project root (one level above backend/)
         env_file=".env",

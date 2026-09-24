@@ -1,8 +1,8 @@
-"""
+﻿"""
 backend/test_tools.py -- Integration test runner for all support tools.
 
 Run from the project root:
-    .venv\\Scripts\\python.exe -m backend.test_tools
+    .venv\Scripts\python.exe -m backend.test_tools
 
 Uses the existing SQLAlchemy SessionLocal -- no extra DB connections.
 Safe to run multiple times: cancel_order handles the already-cancelled
@@ -15,7 +15,7 @@ from typing import Any
 from backend.database import SessionLocal
 from tools.account_tool import check_account
 from tools.delivery_tool import check_delivery
-from tools.order_tool import cancel_order, check_order
+from tools.order_tool import cancel_order, check_order, find_orders_by_email
 from tools.payment_tool import check_payment, check_refund_eligibility
 
 
@@ -156,6 +156,57 @@ def run_tests() -> None:
         # Attempt to cancel a non-existent order
         r = cancel_order("ORD_NONEXISTENT", db)
         _run("Non-existent order cancel returns success=False", r, "success", False)
+
+        # ------------------------------------------------------------------
+        # find_orders_by_email  (Task 10 -- email-based order lookup)
+        # ------------------------------------------------------------------
+        print("\n[find_orders_by_email]")
+
+        # C101 (aarav.sharma@example.com) has ORD001 + ORD006
+        r = find_orders_by_email("aarav.sharma@example.com", db)
+        _run("known email returns success=True", r, "success", True)
+        _run("customer_id is C101", r, "customer_id", "C101")
+        order_ids_c101 = [o["order_id"] for o in r.get("orders", [])]
+        _run(
+            "C101 orders include ORD001 or ORD006",
+            {"v": "ORD001" in order_ids_c101 or "ORD006" in order_ids_c101},
+            "v", True,
+        )
+
+        # Each order dict must expose the required safe fields
+        if r.get("orders"):
+            sample = r["orders"][0]
+            for field in ("order_id", "product_name", "status", "total_amount"):
+                _run(
+                    f"order dict has '{field}' field",
+                    {"v": field in sample}, "v", True,
+                )
+            _run(
+                "no sensitive credential fields in order dict",
+                {"v": "password" not in sample and "auth" not in str(sample).lower()},
+                "v", True,
+            )
+
+        # Unknown email
+        r2 = find_orders_by_email("unknown@nowhere.com", db)
+        _run("unknown email returns success=False", r2, "success", False)
+
+        # Empty / blank email
+        r3 = find_orders_by_email("", db)
+        _run("empty email returns success=False", r3, "success", False)
+
+        # Case-insensitive: uppercase email should still find the account
+        r4 = find_orders_by_email("AARAV.SHARMA@EXAMPLE.COM", db)
+        _run("uppercase email lookup succeeds", r4, "success", True)
+
+        # C105 (karan.joshi@example.com) has ORD005 + ORD010
+        r5 = find_orders_by_email("karan.joshi@example.com", db)
+        _run("karan.joshi found", r5, "success", True)
+        order_ids_c105 = [o["order_id"] for o in r5.get("orders", [])]
+        _run(
+            "C105 orders include ORD005",
+            {"v": "ORD005" in order_ids_c105}, "v", True,
+        )
 
         # ------------------------------------------------------------------
         # Summary

@@ -1,16 +1,13 @@
 ﻿# -*- coding: utf-8 -*-
 """
-frontend/app.py -- SupportFlow AI customer-facing Streamlit app.
+frontend/app.py — SupportFlow AI customer-facing Streamlit app.
 
-SupportFlow AI is a fictional e-commerce storefront with
-AI-powered customer support.
+Run from the project root:
+    .venv\Scripts\streamlit.exe run frontend/app.py
 
-Main sections:
-    🏠 Shop
-    📦 My Orders
-    🎧 Support
-
-The internal multi-agent architecture is never shown to customers.
+The internal multi-agent coordinator runs in the background.
+No agent names, tool names, workflow steps, or internal data are
+shown to the customer.
 """
 
 from __future__ import annotations
@@ -18,50 +15,35 @@ from __future__ import annotations
 import os
 import sys
 
-# ---------------------------------------------------------------------------
-# Project root
-# ---------------------------------------------------------------------------
-
-_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
-
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-
-
-# ---------------------------------------------------------------------------
-# Third-party imports
-# ---------------------------------------------------------------------------
 
 import streamlit as st
 from sqlalchemy import select
 
-
-# ---------------------------------------------------------------------------
-# Project imports
-# ---------------------------------------------------------------------------
-
+from agents.coordinator import run_coordinator
 from backend.database import SessionLocal
 from backend.models.product import Product
 
-from agents.coordinator import run_coordinator
-
 from frontend.components import (
-    EXAMPLES,
     render_examples,
     render_find_my_order,
     render_followup_input,
     render_product_card,
     render_resolution,
     render_sidebar,
-    validate_order_id,
     validate_customer_id,
+    validate_order_id,
 )
+
+from tools.order_tool import find_orders_by_email
+from tools.payment_tool import check_payment
+from tools.delivery_tool import check_delivery
 
 
 # ---------------------------------------------------------------------------
-# Page configuration
+# Page config
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
@@ -79,31 +61,28 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-
     .block-container {
-        padding-top: 1.8rem;
-        max-width: 1200px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1180px;
     }
 
-    .store-title {
-        font-size: 2.4rem;
-        font-weight: 800;
-        margin-bottom: 0.2rem;
-    }
-
-    .store-subtitle {
-        color: #9ca3af;
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
-    }
-
-    .section-title {
+    .product-price {
         font-size: 1.6rem;
         font-weight: 700;
-        margin-top: 1rem;
-        margin-bottom: 1rem;
     }
 
+    .product-meta {
+        color: #a0a0aa;
+        font-size: 0.95rem;
+    }
+
+    .order-card {
+        padding: 1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        margin-bottom: 1rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -111,7 +90,14 @@ st.markdown(
 
 
 # ---------------------------------------------------------------------------
-# Session state defaults
+# Sidebar
+# ---------------------------------------------------------------------------
+
+render_sidebar()
+
+
+# ---------------------------------------------------------------------------
+# Session state
 # ---------------------------------------------------------------------------
 
 _STATE_DEFAULTS = [
@@ -123,6 +109,8 @@ _STATE_DEFAULTS = [
     ("fmo_orders_result", None),
     ("fmo_selected_id", None),
     ("selected_product_id", None),
+    ("my_orders_result", None),
+    ("my_orders_email", ""),
 ]
 
 for _key, _default in _STATE_DEFAULTS:
@@ -131,55 +119,41 @@ for _key, _default in _STATE_DEFAULTS:
 
 
 # ---------------------------------------------------------------------------
-# Helper functions
+# Helpers
 # ---------------------------------------------------------------------------
-
-def _reset_support_state() -> None:
-    """Reset support-related session state."""
-
-    st.session_state.result = None
-    st.session_state.original_request = ""
-    st.session_state.pending_input = ""
-
-    st.session_state.fmo_show_email = False
-    st.session_state.fmo_orders_result = None
-    st.session_state.fmo_selected_id = None
-
 
 def _reset_fmo_state() -> None:
     """Reset Find My Order state."""
-
     st.session_state.fmo_show_email = False
     st.session_state.fmo_orders_result = None
     st.session_state.fmo_selected_id = None
 
 
-def _fetch_products() -> list[Product]:
+def _reset_my_orders_state() -> None:
+    """Reset My Orders state."""
+    st.session_state.my_orders_result = None
+    st.session_state.my_orders_email = ""
+
+
+def _reset_support_state() -> None:
     """
-    Fetch all products from PostgreSQL.
+    Clear all previous support conversation state.
 
-    Product data is never hardcoded in the frontend.
+    Important:
+    When moving from Product Details -> Support, the old resolution
+    must not remain visible.
     """
-
-    db = SessionLocal()
-
-    try:
-        statement = (
-            select(Product)
-            .order_by(Product.name.asc())
-        )
-
-        return list(db.scalars(statement).all())
-
-    finally:
-        db.close()
+    st.session_state.result = None
+    st.session_state.original_request = ""
+    st.session_state.pending_input = ""
+    _reset_fmo_state()
 
 
 def _needs_followup(result: dict | None) -> str | None:
     """
-    Return the missing information type required by the coordinator.
+    Return the missing-ID type when the coordinator requires
+    additional information.
     """
-
     if result is None:
         return None
 
@@ -189,49 +163,213 @@ def _needs_followup(result: dict | None) -> str | None:
     return result.get("missing")
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
+def _fetch_products() -> list[Product]:
+    """Fetch all products dynamically from PostgreSQL."""
+    db = SessionLocal()
 
-render_sidebar()
+    try:
+        products = db.scalars(
+            select(Product).order_by(Product.name.asc())
+        ).all()
+
+        return list(products)
+
+    finally:
+        db.close()
+
+
+def _fetch_product(product_id: str) -> Product | None:
+    """Fetch one product by business product ID."""
+    db = SessionLocal()
+
+    try:
+        return db.scalar(
+            select(Product).where(Product.product_id == product_id)
+        )
+
+    finally:
+        db.close()
+
+
+def _fetch_order_extra_details(order_id: str) -> dict:
+    """
+    Fetch payment and delivery information for one order.
+
+    Business logic remains inside the existing deterministic tools.
+    """
+    db = SessionLocal()
+
+    try:
+        payment_result = check_payment(order_id, db)
+        delivery_result = check_delivery(order_id, db)
+
+        return {
+            "payment": payment_result,
+            "delivery": delivery_result,
+        }
+
+    finally:
+        db.close()
+
+
+def _load_my_orders(email: str) -> dict:
+    """Fetch customer orders using the existing order lookup tool."""
+    db = SessionLocal()
+
+    try:
+        return find_orders_by_email(email, db)
+
+    finally:
+        db.close()
+
+
+def _render_order_card(order: dict) -> None:
+    """Render one customer order with payment and delivery details."""
+
+    order_id = order.get("order_id", "")
+    product_name = order.get("product_name", "Product")
+    amount = order.get("total_amount", 0)
+    order_status = order.get("status", "UNKNOWN")
+    order_date = order.get("order_date", "")
+
+    extra = _fetch_order_extra_details(order_id)
+
+    payment = extra.get("payment", {})
+    delivery = extra.get("delivery", {})
+
+    payment_status = payment.get("status", "Not available")
+
+    delivery_status = delivery.get("status", "Not available")
+    tracking_id = delivery.get("tracking_id")
+    expected_date = delivery.get("expected_date")
+
+    with st.container(border=True):
+
+        top_left, top_right = st.columns([3, 1])
+
+        with top_left:
+            st.markdown(f"### 🛍️ {product_name}")
+            st.caption(f"Order ID: **{order_id}**")
+
+        with top_right:
+            st.markdown(
+                f"### ₹{float(amount):,.2f}"
+            )
+
+        st.markdown("---")
+
+        info_1, info_2, info_3 = st.columns(3)
+
+        with info_1:
+            st.markdown("**Order Status**")
+
+            if order_status == "DELIVERED":
+                st.success(f"✅ {order_status}")
+            elif order_status == "CANCELLED":
+                st.error(f"❌ {order_status}")
+            elif order_status == "PENDING":
+                st.warning(f"⏳ {order_status}")
+            else:
+                st.info(f"📦 {order_status}")
+
+        with info_2:
+            st.markdown("**Payment**")
+
+            if payment_status == "SUCCESS":
+                st.success(f"💳 {payment_status}")
+            elif payment_status == "FAILED":
+                st.error(f"❌ {payment_status}")
+            elif payment_status == "REFUNDED":
+                st.info(f"↩️ {payment_status}")
+            elif payment_status == "PENDING":
+                st.warning(f"⏳ {payment_status}")
+            else:
+                st.caption("Not available")
+
+        with info_3:
+            st.markdown("**Delivery**")
+
+            if delivery_status == "DELIVERED":
+                st.success(f"🚚 {delivery_status}")
+            elif delivery_status == "DELAYED":
+                st.warning(f"⚠️ {delivery_status}")
+            elif delivery_status == "SHIPPED":
+                st.info(f"🚚 {delivery_status}")
+            elif delivery_status == "OUT_FOR_DELIVERY":
+                st.info(f"📍 {delivery_status}")
+            elif delivery_status == "PENDING":
+                st.warning(f"⏳ {delivery_status}")
+            else:
+                st.caption("Not available")
+
+        if order_date:
+            st.caption(f"📅 Ordered on {order_date}")
+
+        delivery_details = []
+
+        if tracking_id:
+            delivery_details.append(
+                f"**Tracking ID:** {tracking_id}"
+            )
+
+        if expected_date:
+            delivery_details.append(
+                f"**Expected:** {expected_date}"
+            )
+
+        if delivery_details:
+            st.markdown(" • ".join(delivery_details))
+
+        st.markdown("")
+
+        if st.button(
+            "💬 Get Support",
+            key=f"order_support_{order_id}",
+            use_container_width=True,
+        ):
+            _reset_support_state()
+
+            st.session_state.original_request = (
+                f"I need help with my order. "
+                f"Order ID: {order_id}"
+            )
+
+            st.session_state.pending_input = (
+                f"I need help with Order ID: {order_id}."
+            )
+
+            st.session_state.page = "support"
+
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 
-st.markdown(
-    '<div class="store-title">🛍️ SupportFlow AI</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="store-subtitle">'
-    "Shop products and get AI-powered customer support when you need it."
-    "</div>",
-    unsafe_allow_html=True,
-)
+st.markdown("# 🧠 SupportFlow AI")
+st.caption("Smart shopping support powered by AI")
 
 
 # ---------------------------------------------------------------------------
-# Main navigation
+# Navigation
 # ---------------------------------------------------------------------------
 
 nav_shop, nav_orders, nav_support = st.columns(3)
 
 with nav_shop:
     if st.button(
-        "🏠 Shop",
+        "🛍️ Shop",
         use_container_width=True,
-        type=(
-            "primary"
-            if st.session_state.page == "shop"
-            else "secondary"
-        ),
-        key="nav_shop",
+        type="primary" if st.session_state.page == "shop" else "secondary",
     ):
         st.session_state.page = "shop"
+
+        st.session_state.selected_product_id = None
+
         _reset_support_state()
+        _reset_my_orders_state()
+
         st.rerun()
 
 
@@ -239,30 +377,28 @@ with nav_orders:
     if st.button(
         "📦 My Orders",
         use_container_width=True,
-        type=(
-            "primary"
-            if st.session_state.page == "orders"
-            else "secondary"
-        ),
-        key="nav_orders",
+        type="primary" if st.session_state.page == "orders" else "secondary",
     ):
         st.session_state.page = "orders"
+        st.session_state.selected_product_id = None
+
         _reset_support_state()
+
         st.rerun()
 
 
 with nav_support:
     if st.button(
-        "🎧 Support",
+        "💬 AI Support",
         use_container_width=True,
-        type=(
-            "primary"
-            if st.session_state.page == "support"
-            else "secondary"
-        ),
-        key="nav_support",
+        type="primary" if st.session_state.page == "support" else "secondary",
     ):
         st.session_state.page = "support"
+        st.session_state.selected_product_id = None
+
+        _reset_support_state()
+        _reset_my_orders_state()
+
         st.rerun()
 
 
@@ -270,281 +406,430 @@ st.markdown("---")
 
 
 # ===========================================================================
-# SHOP
+# SHOP PAGE
 # ===========================================================================
 
 if st.session_state.page == "shop":
 
-    st.markdown(
-        '<div class="section-title">Discover Products</div>',
-        unsafe_allow_html=True,
-    )
-
     # -----------------------------------------------------------------------
-    # Load products
+    # Product details page
     # -----------------------------------------------------------------------
 
-    try:
-        products = _fetch_products()
+    if st.session_state.selected_product_id:
 
-    except Exception as exc:
-        st.error(
-            "Unable to load products right now. "
-            "Please make sure the database is running."
-        )
-        st.caption(f"Database error: {type(exc).__name__}")
-        st.stop()
-
-    # -----------------------------------------------------------------------
-    # Empty database state
-    # -----------------------------------------------------------------------
-
-    if not products:
-        st.info(
-            "No products are available right now."
-        )
-        st.stop()
-
-    # -----------------------------------------------------------------------
-    # Search + category filter
-    # -----------------------------------------------------------------------
-
-    search_col, category_col = st.columns([2, 1])
-
-    with search_col:
-        search_text = st.text_input(
-            "Search products",
-            placeholder="🔎 Search by product name or category...",
-            key="product_search",
+        product = _fetch_product(
+            st.session_state.selected_product_id
         )
 
-    # Build categories dynamically from database.
-    categories = sorted(
-        {
-            product.category
-            for product in products
-            if product.category
-        }
-    )
+        if product is None:
 
-    with category_col:
-        category_options = ["All"] + categories
+            st.warning("Product not found.")
 
-        selected_category = st.selectbox(
-            "Category",
-            options=category_options,
-            key="product_category",
-        )
-
-    # -----------------------------------------------------------------------
-    # Deterministic filtering
-    # -----------------------------------------------------------------------
-
-    filtered_products = products
-
-    if search_text.strip():
-        query = search_text.strip().lower()
-
-        filtered_products = [
-            product
-            for product in filtered_products
-            if (
-                query in product.name.lower()
-                or (
-                    product.category
-                    and query in product.category.lower()
-                )
-            )
-        ]
-
-    if selected_category != "All":
-        filtered_products = [
-            product
-            for product in filtered_products
-            if product.category == selected_category
-        ]
-
-    # -----------------------------------------------------------------------
-    # Results count
-    # -----------------------------------------------------------------------
-
-    st.caption(
-        f"Showing {len(filtered_products)} "
-        f"of {len(products)} products"
-    )
-
-    # -----------------------------------------------------------------------
-    # No search results
-    # -----------------------------------------------------------------------
-
-    if not filtered_products:
-        st.info(
-            "No products found. Try another search or category."
-        )
-        st.stop()
-
-    # -----------------------------------------------------------------------
-    # Product grid
-    # -----------------------------------------------------------------------
-
-    columns = st.columns(3)
-
-    for index, product in enumerate(filtered_products):
-
-        with columns[index % 3]:
-
-            selected = render_product_card(product)
-
-            if selected:
-                st.session_state.selected_product_id = (
-                    product.product_id
-                )
-
-                st.session_state.selected_product_name = (
-                    product.name
-                )
-
-                st.session_state.selected_product_price = (
-                    product.price
-                )
-
-                st.session_state.selected_product_category = (
-                    product.category
-                )
-
+            if st.button(
+                "← Back to Shop",
+                key="btn_product_missing_back",
+            ):
+                st.session_state.selected_product_id = None
                 st.rerun()
 
-    # -----------------------------------------------------------------------
-    # Selected product
-    # -----------------------------------------------------------------------
+        else:
 
-    selected_product_id = st.session_state.get(
-        "selected_product_id"
-    )
+            if st.button(
+                "← Back to Shop",
+                key="btn_back_to_shop",
+            ):
+                st.session_state.selected_product_id = None
+                st.rerun()
 
-    if selected_product_id:
+            st.markdown("## Product Details")
 
-        selected_product = next(
-            (
-                product
-                for product in products
-                if product.product_id == selected_product_id
-            ),
-            None,
-        )
+            st.markdown(
+                f"### 🛍️ {product.name}"
+            )
 
-        if selected_product:
+            if product.category:
+                st.caption(product.category)
+
+            st.markdown(
+                f"## ₹{product.price:,.2f}"
+            )
 
             st.markdown("---")
-            st.markdown("### 🛍️ Selected Product")
 
-            with st.container(border=True):
+            info_col, support_col = st.columns([2, 1])
 
-                st.markdown(
-                    f"## {selected_product.name}"
-                )
+            with info_col:
 
-                if selected_product.category:
-                    st.caption(
-                        selected_product.category
+                st.markdown("### 📋 Product Information")
+
+                if product.category:
+                    st.write(
+                        f"**Category:** {product.category}"
                     )
 
-                st.markdown(
-                    f"### ₹{selected_product.price:,.2f}"
-                )
-
-                if selected_product.store:
-                    st.caption(
-                        f"Store: {selected_product.store}"
+                if product.store:
+                    st.write(
+                        f"**Store:** {product.store}"
                     )
 
-                st.info(
-                    "Product details page will be added next."
+                if product.stock > 0:
+                    st.success(
+                        f"✅ In Stock — {product.stock} available"
+                    )
+
+                else:
+                    st.error(
+                        "❌ Currently out of stock"
+                    )
+
+            with support_col:
+
+                st.markdown("### 💬 Need Help?")
+
+                st.write(
+                    "Have a question about this product "
+                    "or an existing order?"
                 )
 
                 if st.button(
-                    "🎧 Need help with this product?",
-                    key="support_selected_product",
+                    "💬 Get Support",
                     type="primary",
+                    use_container_width=True,
+                    key=f"support_product_{product.product_id}",
                 ):
-                    st.session_state.page = "support"
 
+                    st.session_state.result = None
+                    st.session_state.original_request = ""
                     st.session_state.pending_input = (
-                        f"I need help with "
-                        f"{selected_product.name}."
+                        f"I need help with {product.name}."
                     )
+
+                    _reset_fmo_state()
+
+                    st.session_state.page = "support"
+                    st.session_state.selected_product_id = None
 
                     st.rerun()
 
+            st.markdown("---")
+
+            st.info(
+                "Product information is loaded dynamically "
+                "from the SupportFlow AI product catalog."
+            )
+
+
+    # -----------------------------------------------------------------------
+    # Product catalog
+    # -----------------------------------------------------------------------
+
+    else:
+
+        st.markdown("## 🛍️ Product Catalog")
+
+        st.caption(
+            "Explore products and get AI-powered support when you need it."
+        )
+
+        products = _fetch_products()
+
+        if not products:
+
+            st.warning(
+                "No products are available right now."
+            )
+
+        else:
+
+            # ---------------------------------------------------------------
+            # Search + category filter
+            # ---------------------------------------------------------------
+
+            search_col, category_col = st.columns([2, 1])
+
+            with search_col:
+
+                search_text = st.text_input(
+                    "🔎 Search products",
+                    placeholder="Search iPhone, laptop, headphones...",
+                    key="product_search",
+                )
+
+            categories = sorted(
+                {
+                    product.category
+                    for product in products
+                    if product.category
+                }
+            )
+
+            with category_col:
+
+                selected_category = st.selectbox(
+                    "📂 Category",
+                    ["All Categories"] + categories,
+                    key="product_category",
+                )
+
+            # ---------------------------------------------------------------
+            # Filtering
+            # ---------------------------------------------------------------
+
+            filtered_products = products
+
+            if search_text.strip():
+
+                query = search_text.strip().lower()
+
+                filtered_products = [
+                    product
+                    for product in filtered_products
+                    if (
+                        query in product.name.lower()
+                        or (
+                            product.category
+                            and query in product.category.lower()
+                        )
+                    )
+                ]
+
+            if selected_category != "All Categories":
+
+                filtered_products = [
+                    product
+                    for product in filtered_products
+                    if product.category == selected_category
+                ]
+
+            st.markdown("---")
+
+            if not filtered_products:
+
+                st.info(
+                    "No products matched your search."
+                )
+
+            else:
+
+                st.caption(
+                    f"{len(filtered_products)} product(s) found"
+                )
+
+                # -----------------------------------------------------------
+                # Product grid
+                # -----------------------------------------------------------
+
+                columns = st.columns(3)
+
+                for index, product in enumerate(filtered_products):
+
+                    with columns[index % 3]:
+
+                        if render_product_card(product):
+
+                            st.session_state.selected_product_id = (
+                                product.product_id
+                            )
+
+                            st.rerun()
+
 
 # ===========================================================================
-# MY ORDERS
+# MY ORDERS PAGE
 # ===========================================================================
 
 elif st.session_state.page == "orders":
 
-    st.markdown(
-        '<div class="section-title">📦 My Orders</div>',
-        unsafe_allow_html=True,
+    st.markdown("## 📦 My Orders")
+
+    st.caption(
+        "Enter your registered email to view your orders."
     )
 
-    st.info(
-        "My Orders is coming next. "
-        "For now, you can use Support → Find My Order "
-        "to locate an order using your registered email."
+    # -----------------------------------------------------------------------
+    # Email input
+    # -----------------------------------------------------------------------
+
+    email_col, button_col = st.columns([3, 1])
+
+    with email_col:
+
+        order_email = st.text_input(
+            "Registered Email",
+            placeholder="Enter your registered email",
+            value=st.session_state.get(
+                "my_orders_email",
+                "",
+            ),
+            key="my_orders_email_input",
+        )
+
+    with button_col:
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        view_orders_clicked = st.button(
+            "🔎 View My Orders",
+            type="primary",
+            use_container_width=True,
+            key="view_my_orders",
+        )
+
+    # -----------------------------------------------------------------------
+    # Fetch orders
+    # -----------------------------------------------------------------------
+
+    if view_orders_clicked:
+
+        email = order_email.strip().lower()
+
+        if not email:
+
+            st.warning(
+                "Please enter your registered email address."
+            )
+
+        else:
+
+            with st.spinner(
+                "Loading your orders..."
+            ):
+
+                try:
+
+                    orders_result = _load_my_orders(email)
+
+                    st.session_state.my_orders_email = email
+                    st.session_state.my_orders_result = orders_result
+
+                except Exception:
+
+                    st.session_state.my_orders_result = None
+
+                    st.error(
+                        "Something went wrong while loading your orders. "
+                        "Please try again."
+                    )
+
+    # -----------------------------------------------------------------------
+    # Display orders
+    # -----------------------------------------------------------------------
+
+    orders_result = st.session_state.get(
+        "my_orders_result"
     )
 
-    if st.button(
-        "🎧 Go to Support",
-        type="primary",
-        key="orders_go_support",
-    ):
-        st.session_state.page = "support"
-        st.rerun()
+    if orders_result:
+
+        if not orders_result.get("success"):
+
+            st.error(
+                orders_result.get(
+                    "message",
+                    "No account found.",
+                )
+            )
+
+        else:
+
+            customer_name = orders_result.get(
+                "customer_name",
+                "Customer",
+            )
+
+            orders = orders_result.get(
+                "orders",
+                [],
+            )
+
+            st.markdown("---")
+
+            st.markdown(
+                f"### 👋 Hi {customer_name}"
+            )
+
+            if not orders:
+
+                st.info(
+                    "No orders were found for this account."
+                )
+
+            else:
+
+                st.caption(
+                    f"{len(orders)} order(s) found"
+                )
+
+                st.markdown("")
+
+                for order in orders:
+                    _render_order_card(order)
+
+    else:
+
+        st.markdown("---")
+
+        st.info(
+            "Enter your registered email above to see your orders."
+        )
+
+        st.markdown("### 💬 Need help with an order?")
+
+        if st.button(
+            "Open AI Support",
+            type="secondary",
+            key="orders_open_support",
+        ):
+
+            _reset_support_state()
+
+            st.session_state.page = "support"
+
+            st.rerun()
 
 
 # ===========================================================================
-# SUPPORT
+# SUPPORT PAGE
 # ===========================================================================
 
 elif st.session_state.page == "support":
 
-    st.markdown(
-        '<div class="section-title">'
-        "🎧 How can we help you?"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("## 🎧 How can we help you?")
 
     st.caption(
         "Describe your issue and SupportFlow AI will help resolve it."
     )
 
     # -----------------------------------------------------------------------
-    # Session state for pending demo input
+    # Consume pending input
     # -----------------------------------------------------------------------
 
-    pending = st.session_state.get(
+    _pending = st.session_state.get(
         "pending_input",
         "",
     )
 
-    if pending:
+    if _pending:
+
+        st.session_state.result = None
+        st.session_state.original_request = ""
         st.session_state.pending_input = ""
-        default_value = pending
+
+        default_value = _pending
 
     else:
+
         default_value = ""
 
     # -----------------------------------------------------------------------
     # Demo scenarios
     # -----------------------------------------------------------------------
 
-    selected_example = render_examples()
+    selected_demo = render_examples()
 
-    if selected_example:
+    if selected_demo:
 
-        st.session_state.pending_input = selected_example
+        st.session_state.pending_input = selected_demo
         st.session_state.result = None
         st.session_state.original_request = ""
 
@@ -553,45 +838,48 @@ elif st.session_state.page == "support":
         st.rerun()
 
     # -----------------------------------------------------------------------
-    # Issue input
+    # Support input
     # -----------------------------------------------------------------------
 
     user_message: str = st.text_area(
         label="Describe your issue",
         label_visibility="collapsed",
         value=default_value,
-        height=130,
+        height=150,
         placeholder=(
-            "Example: My payment was successful "
-            "but my order is still pending."
+            "My payment was successful but my iPhone 15 "
+            "order is still pending."
         ),
-        key="support_message",
     )
+
+    # -----------------------------------------------------------------------
+    # Buttons
+    # -----------------------------------------------------------------------
 
     col_resolve, col_clear = st.columns([3, 1])
 
     with col_resolve:
 
         resolve_clicked = st.button(
-            "🔍 Resolve Issue",
+            "🔎 Resolve Issue",
             type="primary",
             use_container_width=True,
-            key="resolve_issue",
+            key="support_resolve",
         )
 
     with col_clear:
 
-        if st.button(
+        clear_clicked = st.button(
             "Clear",
             use_container_width=True,
-            key="clear_support",
-        ):
-            _reset_support_state()
+            key="support_clear",
+        )
 
-            if "support_message" in st.session_state:
-                del st.session_state["support_message"]
+    if clear_clicked:
 
-            st.rerun()
+        _reset_support_state()
+
+        st.rerun()
 
     # -----------------------------------------------------------------------
     # Run coordinator
@@ -610,16 +898,17 @@ elif st.session_state.page == "support":
         else:
 
             st.session_state.original_request = msg
+
             _reset_fmo_state()
 
             with st.spinner(
-                "Resolving your issue..."
+                "Resolving your issue…"
             ):
 
                 try:
 
-                    st.session_state.result = (
-                        run_coordinator(msg)
+                    st.session_state.result = run_coordinator(
+                        msg
                     )
 
                 except Exception:
@@ -632,7 +921,7 @@ elif st.session_state.page == "support":
                     )
 
     # -----------------------------------------------------------------------
-    # Display resolution
+    # Resolution
     # -----------------------------------------------------------------------
 
     if st.session_state.result:
@@ -649,7 +938,8 @@ elif st.session_state.page == "support":
             False,
         )
 
-        # Safety net: never display raw None.
+        # Safety net against raw None output
+
         if response and "None" in response:
 
             response = (
@@ -662,11 +952,13 @@ elif st.session_state.page == "support":
 
         st.markdown("---")
 
-        missing = _needs_followup(result)
+        missing = _needs_followup(
+            result
+        )
 
-        # ===============================================================
+        # ===================================================================
         # Missing Order ID
-        # ===============================================================
+        # ===================================================================
 
         if missing == "order_id":
 
@@ -679,16 +971,14 @@ elif st.session_state.page == "support":
             st.markdown("")
 
             selected_order_id = render_find_my_order(
-                orders_result=(
-                    st.session_state.get(
-                        "fmo_orders_result"
-                    )
+                orders_result=st.session_state.get(
+                    "fmo_orders_result"
                 )
             )
 
-            # -----------------------------------------------------------
-            # Customer selected an order
-            # -----------------------------------------------------------
+            # ---------------------------------------------------------------
+            # Find My Order selection
+            # ---------------------------------------------------------------
 
             if selected_order_id:
 
@@ -700,13 +990,15 @@ elif st.session_state.page == "support":
                 _reset_fmo_state()
 
                 with st.spinner(
-                    "🔄 Checking your order..."
+                    "🔄 Checking your order…"
                 ):
 
                     try:
 
                         st.session_state.result = (
-                            run_coordinator(combined)
+                            run_coordinator(
+                                combined
+                            )
                         )
 
                     except Exception:
@@ -720,18 +1012,20 @@ elif st.session_state.page == "support":
 
                 new_result = st.session_state.result
 
-                if new_result and new_result.get(
-                    "resolved"
+                if (
+                    new_result
+                    and new_result.get("resolved")
                 ):
+
                     st.session_state.original_request = ""
 
                 st.rerun()
 
-            # -----------------------------------------------------------
-            # Manual Order ID
-            # -----------------------------------------------------------
+            # ---------------------------------------------------------------
+            # Manual Order ID entry
+            # ---------------------------------------------------------------
 
-            fmo_active = (
+            _fmo_active = (
                 st.session_state.get(
                     "fmo_show_email"
                 )
@@ -740,7 +1034,7 @@ elif st.session_state.page == "support":
                 ) is not None
             )
 
-            if not fmo_active:
+            if not _fmo_active:
 
                 st.markdown("---")
 
@@ -754,28 +1048,31 @@ elif st.session_state.page == "support":
 
                 if raw_input is not None:
 
-                    ok, id_or_error = (
-                        validate_order_id(raw_input)
+                    ok, id_or_err = validate_order_id(
+                        raw_input
                     )
 
                     if not ok:
 
-                        st.warning(id_or_error)
+                        st.warning(id_or_err)
+
                         st.stop()
 
                     combined = (
                         f"{st.session_state.original_request} "
-                        f"Order ID: {id_or_error}"
+                        f"Order ID: {id_or_err}"
                     )
 
                     with st.spinner(
-                        "🔄 Checking your request..."
+                        "🔄 Checking your request…"
                     ):
 
                         try:
 
                             st.session_state.result = (
-                                run_coordinator(combined)
+                                run_coordinator(
+                                    combined
+                                )
                             )
 
                         except Exception:
@@ -787,20 +1084,20 @@ elif st.session_state.page == "support":
                                 "Please try again or contact support."
                             )
 
-                    new_result = (
-                        st.session_state.result
-                    )
+                    new_result = st.session_state.result
 
-                    if new_result and new_result.get(
-                        "resolved"
+                    if (
+                        new_result
+                        and new_result.get("resolved")
                     ):
+
                         st.session_state.original_request = ""
 
                     st.rerun()
 
-        # ===============================================================
+        # ===================================================================
         # Missing Customer ID
-        # ===============================================================
+        # ===================================================================
 
         elif missing == "customer_id":
 
@@ -810,36 +1107,39 @@ elif st.session_state.page == "support":
                 hide_clarification=True,
             )
 
-            st.markdown("")
+            st.markdown("---")
 
-            raw_input = render_followup_input(
+            raw_customer_id = render_followup_input(
                 missing
             )
 
-            if raw_input is not None:
+            if raw_customer_id is not None:
 
-                ok, id_or_error = (
-                    validate_customer_id(raw_input)
+                ok, id_or_err = validate_customer_id(
+                    raw_customer_id
                 )
 
                 if not ok:
 
-                    st.warning(id_or_error)
+                    st.warning(id_or_err)
+
                     st.stop()
 
                 combined = (
                     f"{st.session_state.original_request} "
-                    f"Customer ID: {id_or_error}"
+                    f"Customer ID: {id_or_err}"
                 )
 
                 with st.spinner(
-                    "🔄 Checking your request..."
+                    "🔄 Checking your account…"
                 ):
 
                     try:
 
                         st.session_state.result = (
-                            run_coordinator(combined)
+                            run_coordinator(
+                                combined
+                            )
                         )
 
                     except Exception:
@@ -851,20 +1151,20 @@ elif st.session_state.page == "support":
                             "Please try again or contact support."
                         )
 
-                new_result = (
-                    st.session_state.result
-                )
+                new_result = st.session_state.result
 
-                if new_result and new_result.get(
-                    "resolved"
+                if (
+                    new_result
+                    and new_result.get("resolved")
                 ):
+
                     st.session_state.original_request = ""
 
                 st.rerun()
 
-        # ===============================================================
-        # Normal resolution
-        # ===============================================================
+        # ===================================================================
+        # Normal resolved / clarification response
+        # ===================================================================
 
         else:
 

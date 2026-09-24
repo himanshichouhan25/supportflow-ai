@@ -7,6 +7,7 @@ Imports all ORM models so that:
 
 Import ORDER matters: Customer and Product have no FK dependencies,
 Order depends on both, Payment and Delivery depend on Order.
+SupportTicket is independent and can be imported after the existing models.
 """
 
 from backend.models.customer import Customer
@@ -14,6 +15,7 @@ from backend.models.product import Product
 from backend.models.order import Order
 from backend.models.payment import Payment
 from backend.models.delivery import Delivery
+from backend.models.support_ticket import SupportTicket
 
 __all__ = [
     "Customer",
@@ -21,4 +23,5 @@ __all__ = [
     "Order",
     "Payment",
     "Delivery",
+    "SupportTicket",
 ]

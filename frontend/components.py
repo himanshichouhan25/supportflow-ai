@@ -1,43 +1,25 @@
+﻿# -*- coding: utf-8 -*-
 """
-frontend/components.py -- Reusable Streamlit UI components for SupportFlow AI.
+frontend/components.py -- Customer-facing UI components for SupportFlow AI.
 
-Keeps app.py clean by centralising rendering logic.
+Internal multi-agent workflow is completely hidden from the customer.
+
+Components
+----------
+render_sidebar()            - sidebar with info/demo links
+render_examples()           - quick-demo scenario buttons
+validate_order_id()         - format-validate an order ID string
+validate_customer_id()      - format-validate a customer ID string
+render_followup_input()     - warning banner + ID text input + Continue button
+render_find_my_order()      - full email to order-list to select flow
+render_resolution()         - Resolution card (customer-facing only)
+render_product_card()       - Product catalog card
 """
 
 from __future__ import annotations
 
-from typing import Any
-
+import re
 import streamlit as st
-
-# ---------------------------------------------------------------------------
-# Agent metadata
-# ---------------------------------------------------------------------------
-
-AGENT_META: dict[str, dict[str, str]] = {
-    "Coordinator":    {"icon": "🤖", "color": "#6366f1"},
-    "OrderAgent":     {"icon": "📦", "color": "#f59e0b"},
-    "PaymentAgent":   {"icon": "💳", "color": "#10b981"},
-    "DeliveryAgent":  {"icon": "🚚", "color": "#3b82f6"},
-    "AccountAgent":   {"icon": "👤", "color": "#8b5cf6"},
-}
-
-STATUS_ICON: dict[str, str] = {
-    "completed":  "✅",
-    "replanning": "🔄",
-    "error":      "❌",
-}
-
-
-def _agent_icon(agent_name: str) -> str:
-    for key, meta in AGENT_META.items():
-        if key.lower() in agent_name.lower():
-            return meta["icon"]
-    return "🤖"
-
-
-def _status_icon(status: str) -> str:
-    return STATUS_ICON.get(status, "⏳")
 
 
 # ---------------------------------------------------------------------------
@@ -45,185 +27,556 @@ def _status_icon(status: str) -> str:
 # ---------------------------------------------------------------------------
 
 def render_sidebar() -> None:
-    """Render the left sidebar with system info and agent list."""
     with st.sidebar:
         st.markdown("## 🧠 SupportFlow AI")
+        st.markdown("**AI Customer Support Resolution Assistant**")
+        st.caption("Describe your issue and get a support resolution.")
         st.markdown("---")
+
+        st.markdown("#### Demo Scenarios")
         st.markdown(
-            "**Agentic Workflow**\n\n"
-            "`Understand` → `Route` → `Tool` → `Observe` → `Replan` → `Resolve`"
+            "- Payment & Order\n"
+            "- Cancellation & Refund\n"
+            "- Delivery Tracking"
         )
-        st.markdown("---")
-        st.markdown("### Specialist Agents")
-        agents = [
-            ("📦", "Order Agent",    "check_order, cancel_order"),
-            ("💳", "Payment Agent",  "check_payment, refund_eligibility"),
-            ("🚚", "Delivery Agent", "check_delivery"),
-            ("👤", "Account Agent",  "check_account"),
-        ]
-        for icon, name, tools in agents:
-            st.markdown(f"{icon} **{name}**")
-            st.caption(f"Tools: {tools}")
 
         st.markdown("---")
+
+        st.markdown("#### Find My Order")
+        st.markdown(
+            "Don't know your order ID?  \n"
+            "Enter your registered email and select your order."
+        )
+
+        st.markdown("---")
+
         st.caption(
-            "Powered by **FastAPI** · **PostgreSQL** · **Python** · **Gemini AI**\n\n"
+            "Powered by\n"
+            "FastAPI · PostgreSQL · Python · Gemini AI\n\n"
             "_Demo data only. Not affiliated with any real retailer._"
         )
 
 
 # ---------------------------------------------------------------------------
-# Example queries
+# Example buttons
 # ---------------------------------------------------------------------------
 
 EXAMPLES: list[str] = [
     "My payment was successful but my iPhone 15 order ORD005 is still pending.",
-    "Cancel my order ORD007 and check whether I can get a refund.",
-    "Where is my package for ORD009?",
+    "Please cancel my order ORD007 and check whether I am eligible for a refund.",
+    "Where is my package for order ORD009?",
+]
+
+
+_EXAMPLE_LABELS: list[str] = [
+    "💳 Payment & Order",
+    "❌ Cancel & Refund",
+    "🚚 Delivery Tracking",
 ]
 
 
 def render_examples() -> str | None:
     """
-    Render clickable example query buttons.
+    Render clickable demo scenario buttons.
 
-    Returns the selected example text, or None if nothing was clicked.
+    Returns the example text when clicked, otherwise None.
+
+    Clicking does NOT trigger the coordinator.
     """
-    st.markdown("##### Try a demo scenario:")
     cols = st.columns(len(EXAMPLES))
-    labels = [
-        "💳 Payment + Order",
-        "❌ Cancel + Refund",
-        "🚚 Delivery Tracking",
-    ]
-    for col, label, example in zip(cols, labels, EXAMPLES):
+
+    for col, label, example in zip(cols, _EXAMPLE_LABELS, EXAMPLES):
         with col:
-            if st.button(label, use_container_width=True, key=f"ex_{label}"):
+            if st.button(
+                label,
+                use_container_width=True,
+                key=f"ex_{label}",
+            ):
                 return example
+
     return None
 
 
 # ---------------------------------------------------------------------------
-# Workflow visualisation
+# ID validation helpers
 # ---------------------------------------------------------------------------
 
-def render_workflow(steps: list[dict[str, Any]]) -> None:
-    """Render the agent workflow trace as a vertical step timeline."""
-    if not steps:
-        st.info("No workflow steps to display.")
-        return
+_ORDER_ID_RE = re.compile(r"^ORD\d+$", re.IGNORECASE)
+_CUSTOMER_ID_RE = re.compile(r"^C\d+$", re.IGNORECASE)
 
-    st.markdown("### 🔀 Agent Workflow")
 
-    for i, step in enumerate(steps):
-        agent  = step.get("agent", "Unknown")
-        action = step.get("action", "")
-        tool   = step.get("tool", "")
-        status = step.get("status", "completed")
-        icon   = _agent_icon(agent)
-        s_icon = _status_icon(status)
+def validate_order_id(raw: str) -> tuple[bool, str]:
+    """Return (ok, normalised_id_or_error_message)."""
 
-        # Pick background tint based on agent/status
-        if status == "replanning":
-            bg = "#fef3c7"
-            border = "#f59e0b"
-        elif "Coordinator" in agent:
-            bg = "#f0f4ff"
-            border = "#6366f1"
-        else:
-            bg = "#f0fdf4"
-            border = "#10b981"
+    val = raw.strip().upper()
 
-        step_html = f"""
-        <div style="
-            background:{bg};
-            border-left: 4px solid {border};
-            border-radius: 6px;
-            padding: 10px 16px;
-            margin-bottom: 4px;
-        ">
-            <span style="font-weight:700; font-size:0.85rem; color:#374151;">
-                Step {step.get('step', i+1)} &nbsp;·&nbsp; {icon} {agent}
-            </span><br/>
-            <span style="font-size:0.9rem; color:#1f2937;">{action}</span>
-            {"<br/><span style='font-size:0.8rem;color:#6b7280;'>Tool: <code>" + tool + "</code></span>" if tool else ""}
-            <br/><span style="font-size:0.78rem; color:#6b7280;">{s_icon} {status.capitalize()}</span>
-        </div>
-        """
-        st.markdown(step_html, unsafe_allow_html=True)
+    if not val:
+        return False, "Please enter your order ID, for example ORD005."
 
-        # Arrow between steps (not after last)
-        if i < len(steps) - 1:
-            st.markdown(
-                "<div style='text-align:center;color:#9ca3af;font-size:1.2rem;margin:-2px 0;'>↓</div>",
-                unsafe_allow_html=True,
+    if not _ORDER_ID_RE.match(val):
+        return (
+            False,
+            f"'{raw.strip()}' does not look like a valid order ID. "
+            "Please use the format ORD005.",
+        )
+
+    return True, val
+
+
+def validate_customer_id(raw: str) -> tuple[bool, str]:
+    """Return (ok, normalised_id_or_error_message)."""
+
+    val = raw.strip().upper()
+
+    if not val:
+        return False, "Please enter your customer ID, for example C101."
+
+    if not _CUSTOMER_ID_RE.match(val):
+        return (
+            False,
+            f"'{raw.strip()}' does not look like a valid customer ID. "
+            "Please use the format C101.",
+        )
+
+    return True, val
+
+
+# ---------------------------------------------------------------------------
+# Follow-up input widget
+# ---------------------------------------------------------------------------
+
+def render_followup_input(missing: str) -> str | None:
+    """
+    Render a compact follow-up input for a missing order ID or customer ID.
+
+    Returns the raw input string when Continue is clicked.
+    """
+
+    if missing == "order_id":
+        label = "Order ID"
+        placeholder = "e.g. ORD005"
+        hint = "Please provide your order ID so I can continue."
+    else:
+        label = "Customer ID"
+        placeholder = "e.g. C101"
+        hint = "Please provide your customer ID so I can continue."
+
+    st.warning("⚠️ More information needed")
+    st.markdown(f"_{hint}_")
+
+    followup_value = st.text_input(
+        label=label,
+        placeholder=placeholder,
+        key=f"followup_{missing}",
+    )
+
+    if st.button(
+        "➡️ Continue",
+        type="primary",
+        key="btn_continue",
+    ):
+        return followup_value
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Find My Order flow
+# ---------------------------------------------------------------------------
+
+_STATUS_BADGE: dict[str, str] = {
+    "PENDING": "🟡 Pending",
+    "CONFIRMED": "🔵 Confirmed",
+    "SHIPPED": "📦 Shipped",
+    "OUT_FOR_DELIVERY": "🚚 Out for delivery",
+    "DELIVERED": "✅ Delivered",
+    "CANCELLED": "❌ Cancelled",
+}
+
+
+def _product_emoji(product_name: str) -> str:
+    """Return a best-match emoji for a product name."""
+
+    lower = product_name.lower()
+
+    if any(
+        word in lower
+        for word in ("iphone", "samsung", "galaxy", "phone")
+    ):
+        return "📱"
+
+    if any(
+        word in lower
+        for word in ("laptop", "notebook", "vivobook", "macbook", "asus")
+    ):
+        return "💻"
+
+    if any(
+        word in lower
+        for word in (
+            "headphone",
+            "earphone",
+            "earbuds",
+            "airpod",
+            "wh-",
+            "boat",
+            "sony",
+        )
+    ):
+        return "🎧"
+
+    if any(
+        word in lower
+        for word in (
+            "shoe",
+            "sneaker",
+            "air max",
+            "footwear",
+            "nike",
+        )
+    ):
+        return "👟"
+
+    if any(
+        word in lower
+        for word in ("mouse", "keyboard", "logitech")
+    ):
+        return "🖱️"
+
+    if any(
+        word in lower
+        for word in ("book", "course", "edition", "python")
+    ):
+        return "📖"
+
+    if any(
+        word in lower
+        for word in (
+            "fryer",
+            "oven",
+            "blender",
+            "philips",
+            "mixer",
+        )
+    ):
+        return "🍳"
+
+    if any(
+        word in lower
+        for word in (
+            "bulb",
+            "lamp",
+            "light",
+            "led",
+            "syska",
+        )
+    ):
+        return "💡"
+
+    return "🛒"
+
+
+def _fmt_inr(amount: float) -> str:
+    """Format an amount as INR."""
+
+    try:
+        return f"₹{int(amount):,}"
+    except Exception:
+        return str(amount)
+
+
+def render_find_my_order(
+    orders_result: dict | None,
+) -> str | None:
+    """
+    Render the full 'Find My Order' flow.
+
+    Flow:
+
+        Email
+          ↓
+        Customer orders
+          ↓
+        Select order
+          ↓
+        Return internal order ID
+    """
+
+    # ------------------------------------------------------------------
+    # Phase 0: offer Find My Order
+    # ------------------------------------------------------------------
+
+    if (
+        not st.session_state.get("fmo_show_email")
+        and orders_result is None
+    ):
+        st.warning("⚠️ We need a little more information")
+
+        st.markdown(
+            "Don’t know your order ID? We can find it for you."
+        )
+
+        if st.button(
+            "🔍 Find My Order",
+            type="secondary",
+            key="btn_find_my_order",
+        ):
+            st.session_state.fmo_show_email = True
+            st.session_state.fmo_orders_result = None
+            st.session_state.fmo_selected_id = None
+            st.rerun()
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Phase 1: email input
+    # ------------------------------------------------------------------
+
+    if (
+        st.session_state.get("fmo_show_email")
+        and st.session_state.get("fmo_orders_result") is None
+    ):
+        st.markdown("#### 📧 Enter your registered email address")
+
+        email_val = st.text_input(
+            label="Email address",
+            placeholder="your-email@example.com",
+            key="fmo_email_input",
+        )
+
+        col_find, col_back = st.columns([2, 1])
+
+        with col_find:
+            find_clicked = st.button(
+                "🔍 Find My Orders",
+                type="primary",
+                key="btn_find_my_orders",
+                use_container_width=True,
             )
 
+        with col_back:
+            if st.button(
+                "Back",
+                key="btn_fmo_back",
+                use_container_width=True,
+            ):
+                st.session_state.fmo_show_email = False
+                st.session_state.fmo_orders_result = None
+                st.rerun()
 
-# ---------------------------------------------------------------------------
-# Final resolution panel
-# ---------------------------------------------------------------------------
+        if find_clicked:
+            raw_email = email_val.strip()
 
-def render_resolution(result: dict[str, Any]) -> None:
-    """Render the final resolution card."""
-    st.markdown("### 🎯 Final Resolution")
+            if not raw_email:
+                st.warning("Please enter your email address.")
 
-    response = result.get("final_response", "No response generated.")
-    resolved = result.get("resolved", False)
-    intent   = result.get("intent", "unknown")
-    intents  = result.get("intents", [])
-    steps    = result.get("steps", [])
+            elif "@" not in raw_email:
+                st.warning("Please enter a valid email address.")
 
-    specialist_calls = sum(
-        1 for s in steps
-        if s.get("agent", "Coordinator") != "Coordinator"
-    )
+            else:
+                from tools.order_tool import find_orders_by_email
+                from backend.database import SessionLocal
 
-    # Resolution badge
-    badge_color = "#10b981" if resolved else "#f59e0b"
-    badge_text  = "Resolved" if resolved else "Partially Resolved"
+                db = SessionLocal()
 
-    st.markdown(
-        f"""
-        <div style="
-            background:#ffffff;
-            border:1px solid #e5e7eb;
-            border-radius:10px;
-            padding:20px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-        ">
-            <div style="margin-bottom:12px;">
-                <span style="
-                    background:{badge_color};
-                    color:white;
-                    padding:3px 12px;
-                    border-radius:99px;
-                    font-size:0.78rem;
-                    font-weight:600;
-                ">{badge_text}</span>
-            </div>
-            <p style="font-size:1.05rem; color:#111827; line-height:1.6; margin:0;">
-                {response}
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+                try:
+                    result = find_orders_by_email(
+                        raw_email,
+                        db,
+                    )
+                finally:
+                    db.close()
 
-    st.markdown("")  # spacer
+                st.session_state.fmo_orders_result = result
+                st.rerun()
 
-    # Metadata row
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Primary Intent", intent.capitalize())
-    with c2:
-        st.metric("Intents Detected", len(intents))
-    with c3:
-        st.metric("Specialist Calls", specialist_calls)
+        return None
 
-    # Show replanning badge if multi-agent
-    if specialist_calls > 1:
-        st.success(
-            f"🔄 Multi-agent workflow: {specialist_calls} specialists "
-            f"collaborated to resolve your request."
+    # ------------------------------------------------------------------
+    # Phase 2: order list
+    # ------------------------------------------------------------------
+
+    result = st.session_state.get("fmo_orders_result")
+
+    if result is None:
+        return None
+
+    if not result.get("success"):
+        st.error(
+            result.get(
+                "message",
+                "We could not find your account. "
+                "Please check the email and try again.",
+            )
         )
+
+        if st.button(
+            "Try a different email",
+            key="btn_fmo_retry",
+        ):
+            st.session_state.fmo_orders_result = None
+            st.rerun()
+
+        return None
+
+    orders = result.get("orders", [])
+    customer_name = result.get("customer_name", "")
+
+    if not orders:
+        st.info(
+            f"We found your account"
+            f"{', ' + customer_name if customer_name else ''}, "
+            "but there are no orders available to display."
+        )
+
+        if st.button(
+            "Try a different email",
+            key="btn_fmo_retry_empty",
+        ):
+            st.session_state.fmo_orders_result = None
+            st.session_state.fmo_show_email = False
+            st.rerun()
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Display order cards
+    # ------------------------------------------------------------------
+
+    greeting = (
+        f"Hi **{customer_name}**! "
+        if customer_name
+        else ""
+    )
+
+    st.markdown("#### 🛒 Your Orders")
+    st.markdown(
+        f"{greeting}"
+        "Please select the order you need help with:"
+    )
+
+    for i, order in enumerate(orders):
+
+        order_id = order["order_id"]
+        product_name = order["product_name"]
+        status = order["status"]
+        amount = order["total_amount"]
+        order_date = order.get("order_date", "")
+
+        emoji = _product_emoji(product_name)
+        badge = _STATUS_BADGE.get(status, status)
+        amount_str = _fmt_inr(amount)
+
+        date_str = (
+            f" · Ordered {order_date}"
+            if order_date
+            else ""
+        )
+
+        with st.container(border=True):
+
+            col_info, col_btn = st.columns([3, 1])
+
+            with col_info:
+                st.markdown(
+                    f"**{emoji} {product_name}**"
+                )
+
+                st.markdown(
+                    f"Status: {badge}"
+                )
+
+                st.markdown(
+                    f"Amount: {amount_str}{date_str}"
+                )
+
+            with col_btn:
+                if st.button(
+                    "Select This Order",
+                    key=f"btn_sel_{i}_{order_id}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    return order_id
+
+    if st.button(
+        "Use a different email",
+        key="btn_fmo_change",
+    ):
+        st.session_state.fmo_orders_result = None
+        st.session_state.fmo_show_email = False
+        st.rerun()
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Product Catalog
+# ---------------------------------------------------------------------------
+
+def render_product_card(product) -> bool:
+    """
+    Render a customer-facing product card.
+
+    The product object is expected to come from the existing
+    PostgreSQL Product SQLAlchemy model.
+
+    Returns:
+        True  -> customer clicked View Product
+        False -> no selection
+    """
+
+    with st.container(border=True):
+
+        emoji = _product_emoji(product.name)
+
+        st.markdown(
+            f"### {emoji} {product.name}"
+        )
+
+        if product.category:
+            st.caption(product.category)
+
+        st.markdown(
+            f"### ₹{product.price:,.2f}"
+        )
+
+        return st.button(
+            "View Product",
+            key=f"view_product_{product.product_id}",
+            use_container_width=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Resolution display
+# ---------------------------------------------------------------------------
+
+def render_resolution(
+    final_response: str,
+    resolved: bool,
+    hide_clarification: bool = False,
+) -> None:
+    """
+    Display the customer-facing resolution.
+
+    No agent names, tool names, workflow steps,
+    or internal data are shown.
+    """
+
+    st.markdown("### 🎯 Resolution")
+
+    if hide_clarification:
+        return
+
+    if resolved:
+        st.success("✅ Resolved")
+
+    else:
+        st.warning(
+            "⚠️ Unable to fully resolve — "
+            "please contact support for further assistance."
+        )
+
+    with st.container(border=True):
+        st.markdown(final_response)

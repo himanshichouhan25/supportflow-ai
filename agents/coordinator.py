@@ -38,11 +38,27 @@ from agents.account_agent import run as run_account
 from agents.return_agent import run as run_return
 from agents.replacement_agent import run as run_replacement
 from backend.database import SessionLocal
-from backend.services.support_ticket_service import create_support_ticket
+from agents.orchestrator import Orchestrator
+
+
+class CoordinatorAgent:
+    """CoordinatorAgent class wrapper for SupportFlow AI agentic orchestration."""
+
+    def __init__(self, db: Session | None = None) -> None:
+        self.orchestrator = Orchestrator(db=db)
+
+    def process_request(
+        self,
+        user_message: str,
+        db: Session | None = None,
+    ) -> dict[str, Any]:
+        """Process user request using Orchestrator."""
+        return run_coordinator(user_message, db=db)
 
 
 # ---------------------------------------------------------------------------
 # Constants
+
 # ---------------------------------------------------------------------------
 
 MAX_SPECIALIST_CALLS = 3

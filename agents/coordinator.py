@@ -51,9 +51,11 @@ class CoordinatorAgent:
         self,
         user_message: str,
         db: Session | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Process user request using Orchestrator."""
-        return run_coordinator(user_message, db=db)
+        orch = Orchestrator(db=db) if db else self.orchestrator
+        return orch.run(user_message, db=db, session_id=session_id)
 
 
 # ---------------------------------------------------------------------------

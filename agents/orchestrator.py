@@ -28,8 +28,11 @@ from agents.state import (
     EscalationContext,
     EscalationCategory,
     TicketPriority,
+    ConversationContext,
+    SessionManager,
     OrchestrationStatus,
 )
+
 from backend.database import SessionLocal
 from backend.models.order import Order
 
@@ -69,6 +72,21 @@ _DELIVERY_KW = {"delivery", "deliver", "track", "tracking", "shipped", "ship", "
 _ACCOUNT_KW = {"account", "profile", "email", "phone", "customer", "registered", "name", "contact"}
 _RETURN_KW = {"return", "returning", "sendback"}
 _REPLACEMENT_KW = {"replace", "replacement", "exchange", "substitute"}
+_FOLLOWUP_PRONOUNS = {
+    "it",
+    "that",
+    "this",
+    "that order",
+    "this order",
+    "the same order",
+    "same order",
+    "same product",
+    "that product",
+    "that payment",
+    "that item",
+    "the item",
+    "this item",
+}
 
 
 def _detect_intents(message: str) -> list[str]:
@@ -314,7 +332,7 @@ class Orchestrator:
             requires_escalation=requires_escalate,
         )
 
-    def run(self, user_message: str, db: Session | None = None) -> dict[str, Any]:
+    def run(self, user_message: str, db: Session | None = None, session_id: str = "default_session") -> dict[str, Any]:
         """
         Execute full agentic workflow for user request.
         """
@@ -325,8 +343,10 @@ class Orchestrator:
             local_session = True
 
         try:
-            # 1. State Initialization
-            state = AgentState(user_request=user_message)
+            # 1. Session Context Retrieval & State Initialization
+            ctx = SessionManager.get_context(session_id)
+            state = AgentState(user_request=user_message, session_id=session_id)
+            state.conversation_context = ctx
             state.status = OrchestrationStatus.PLANNING
 
             # 2. Goal Understanding & Entity Extraction
@@ -334,9 +354,32 @@ class Orchestrator:
             state.intents = intents
             state.intent = intents[0] if intents else "unknown"
             state.order_id = _extract_order_id(user_message)
-            state.customer_id = _extract_customer_id(user_message)
-            state.product_id = _extract_product_id(user_message)
+            state.customer_id = _extract_customer_id(user_message) or ctx.customer_id
+            state.product_id = _extract_product_id(user_message) or ctx.current_product_id
             state.reason = _extract_reason(user_message)
+
+            # Follow-up Anaphora & Contextual Resolution
+            lower_msg = user_message.lower()
+            has_followup_ref = any(p in lower_msg for p in _FOLLOWUP_PRONOUNS)
+
+            # Explicit entity in current prompt overrides older context
+            if state.order_id:
+                ctx.add_order_id(state.order_id)
+            elif has_followup_ref or state.intent in ("refund", "return", "replacement", "order", "payment", "delivery"):
+                if len(ctx.recent_order_ids) > 1 and has_followup_ref:
+                    # Ambiguous reference across multiple recent orders -> NEEDS_CLARIFICATION
+                    state.status = OrchestrationStatus.NEEDS_CLARIFICATION
+                    o1, o2 = ctx.recent_order_ids[0], ctx.recent_order_ids[1]
+                    intent_label = "return" if "return" in lower_msg else (state.intent if state.intent != "unknown" else "resolve")
+                    state.final_response = f"Which order would you like to {intent_label}, {o1} or {o2}?"
+                    state.conversation_context = SessionManager.update_context(session_id, state)
+                    return self._build_result(state)
+                elif ctx.current_order_id or len(ctx.recent_order_ids) == 1:
+                    state.order_id = ctx.current_order_id or ctx.recent_order_ids[0]
+
+            # Contextual Intent Inheritance if prompt has pronoun without explicit intent
+            if state.intent == "unknown" and ctx.current_intent:
+                state.intent = ctx.current_intent
 
             # 3. Policy Retrieval Stage
             state.status = OrchestrationStatus.POLICY_RETRIEVAL
@@ -360,10 +403,12 @@ class Orchestrator:
                         "returns, replacements, and account queries. Could you please provide more details "
                         "about your issue?"
                     )
+                state.conversation_context = SessionManager.update_context(session_id, state)
                 return self._build_result(state)
 
             if decision.requires_escalation:
                 self._escalate(state, active_db, decision.rationale)
+                state.conversation_context = SessionManager.update_context(session_id, state)
                 return self._build_result(state)
 
             # 5. Plan Creation
@@ -380,11 +425,13 @@ class Orchestrator:
             ):
                 self._escalate(state, active_db, "Workflow completed without clean resolution.")
 
+            state.conversation_context = SessionManager.update_context(session_id, state)
             return self._build_result(state)
 
         finally:
             if local_session and active_db:
                 active_db.close()
+
 
 
     def _create_plan(self, state: AgentState) -> None:
@@ -727,6 +774,8 @@ class Orchestrator:
             "status": state.status.value,
             "intent": state.intent,
             "order_id": state.order_id,
+            "session_id": state.session_id,
+            "conversation_context": state.conversation_context.model_dump() if state.conversation_context else None,
             "completed_actions": [a["action"] for a in state.completed_actions],
             "verification": state.verification_result or {"verified": state.status == OrchestrationStatus.RESOLVED},
             "policy_context": state.policy_context.model_dump() if state.policy_context else None,

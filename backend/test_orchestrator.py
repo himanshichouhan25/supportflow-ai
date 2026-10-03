@@ -5,7 +5,7 @@ backend/test_orchestrator.py — Comprehensive unit & integration tests for Agen
 import sys
 from typing import Any
 from backend.database import SessionLocal
-from agents.state import AgentState, OrchestrationStatus, ActionItem
+from agents.state import AgentState, OrchestrationStatus, ActionItem, SessionManager
 from agents.orchestrator import Orchestrator
 from backend.models.order import Order
 from backend.models.payment import Payment
@@ -220,10 +220,55 @@ def test_orchestrator_suite():
         assert r_esc_inelig["state"]["escalation_context"]["category"] == "INELIGIBLE_TRANSACTION"
 
         # ------------------------------------------------------------------
+        # 11. Task 10 Conversation Context & Session Memory Tests
+        # ------------------------------------------------------------------
+        print("[Test 24] Follow-up reference resolution (Turn 1: ORD002 -> Turn 2: 'I want to return it')")
+        session_id_1 = "test_session_t10_01"
+        SessionManager.clear_session(session_id_1)
+        r_t1 = orch.run("Where is my order ORD002?", db=db, session_id=session_id_1)
+        assert r_t1["order_id"] == "ORD002"
+        assert r_t1["conversation_context"]["current_order_id"] == "ORD002"
+        assert "ORD002" in r_t1["conversation_context"]["recent_order_ids"]
+
+        r_t2 = orch.run("I want to return it.", db=db, session_id=session_id_1)
+        assert r_t2["order_id"] == "ORD002"
+        assert r_t2["intent"] == "return"
+        assert r_t2["status"] == "RESOLVED"
+        assert r_t2["conversation_context"]["current_intent"] == "return"
+
+        print("[Test 25] Session Isolation (Session A context does not leak to Session B)")
+        session_id_a = "test_session_user_a"
+        session_id_b = "test_session_user_b"
+        SessionManager.clear_session(session_id_a)
+        SessionManager.clear_session(session_id_b)
+
+        orch.run("Where is my order ORD002?", db=db, session_id=session_id_a)
+        r_user_b = orch.run("I want to return it.", db=db, session_id=session_id_b)
+        assert r_user_b["order_id"] is None
+        assert r_user_b["status"] == "NEEDS_CLARIFICATION"
+
+        print("[Test 26] Ambiguity handling with multiple recent orders -> NEEDS_CLARIFICATION")
+        session_id_amb = "test_session_ambiguous"
+        SessionManager.clear_session(session_id_amb)
+        orch.run("Check status of ORD002", db=db, session_id=session_id_amb)
+        orch.run("Check status of ORD004", db=db, session_id=session_id_amb)
+        r_amb = orch.run("I want to return that one", db=db, session_id=session_id_amb)
+        assert r_amb["status"] == "NEEDS_CLARIFICATION"
+        assert "Which order" in r_amb["final_response"] or "ord" in r_amb["final_response"].lower()
+
+        print("[Test 27] Explicit prompt entity overrides older context")
+        session_id_exp = "test_session_explicit"
+        SessionManager.clear_session(session_id_exp)
+        orch.run("Check status of ORD002", db=db, session_id=session_id_exp)
+        r_exp = orch.run("I actually want to return ORD004", db=db, session_id=session_id_exp)
+        assert r_exp["order_id"] == "ORD004"
+        assert r_exp["conversation_context"]["current_order_id"] == "ORD004"
+
+        # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
         print("\n=================================================")
-        print("  Orchestrator Tests Passed: 23/23")
+        print("  Orchestrator Tests Passed: 27/27")
         print("=================================================\n")
 
     finally:

@@ -186,6 +186,21 @@ def run_tests() -> None:
         print(f"         Response: {r['final_response'][:120]}")
 
         # ------------------------------------------------------------------
+        # Scenario 8: Task 10 Session Memory via CoordinatorAgent
+        # ------------------------------------------------------------------
+        print("\n[Scenario 8] CoordinatorAgent session memory follow-up")
+        from agents.coordinator import CoordinatorAgent
+        coord = CoordinatorAgent(db)
+        r_t1 = coord.process_request("Where is my order ORD002?", db=db, session_id="coord_sess_01")
+        _check("turn 1 resolved ORD002", r_t1.get("order_id") == "ORD002")
+
+        r_t2 = coord.process_request("I want to return it.", db=db, session_id="coord_sess_01")
+        _check("turn 2 resolved 'it' to ORD002", r_t2.get("order_id") == "ORD002")
+        _check("turn 2 resolved intent to return", r_t2.get("intent") == "return")
+        _check("turn 2 status is RESOLVED", r_t2.get("status") == "RESOLVED")
+        print(f"         Response: {r_t2['final_response'][:120]}")
+
+        # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
         total = _passed + _failed

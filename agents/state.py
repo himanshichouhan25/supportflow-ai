@@ -6,10 +6,13 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel, Field
 
+from knowledge.models import PolicyContext
+
 
 class OrchestrationStatus(str, Enum):
     RECEIVED = "RECEIVED"
     PLANNING = "PLANNING"
+    POLICY_RETRIEVAL = "POLICY_RETRIEVAL"
     EXECUTING = "EXECUTING"
     OBSERVING = "OBSERVING"
     VERIFYING = "VERIFYING"
@@ -45,6 +48,7 @@ class AgentState(BaseModel):
 
     tool_result: dict[str, Any] | None = None
     verification_result: dict[str, Any] | None = None
+    policy_context: PolicyContext | None = None
 
     attempt_count: int = 0
     max_attempts: int = 3
@@ -67,7 +71,6 @@ class AgentState(BaseModel):
             if not self.escalation_reason:
                 self.escalation_reason = f"Maximum attempt limit ({self.max_attempts}) reached without resolution."
 
-
     def to_dict(self) -> dict[str, Any]:
         """Convert state to structured dictionary representation."""
         return {
@@ -84,6 +87,7 @@ class AgentState(BaseModel):
             "completed_actions": self.completed_actions,
             "tool_result": self.tool_result,
             "verification_result": self.verification_result,
+            "policy_context": self.policy_context.model_dump() if self.policy_context else None,
             "attempt_count": self.attempt_count,
             "max_attempts": self.max_attempts,
             "status": self.status.value if isinstance(self.status, OrchestrationStatus) else str(self.status),
@@ -91,3 +95,4 @@ class AgentState(BaseModel):
             "ticket_id": self.ticket_id,
             "final_response": self.final_response,
         }
+

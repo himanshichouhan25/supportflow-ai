@@ -130,11 +130,60 @@ def test_orchestrator_suite():
         assert tkt.order_id == "ORD009"
 
         # ------------------------------------------------------------------
+        # 8. Policy RAG Integration & Context Attachment
+        # ------------------------------------------------------------------
+        print("[Test 11] Refund policy retrieval")
+        r_pol_ref = orch.run("I want a refund for my cancelled order ORD006", db=db)
+        assert r_pol_ref["policy_context"] is not None
+        ref_cats = [p["category"] for p in r_pol_ref["policy_context"]["matched_policies"]]
+        assert "refund" in ref_cats
+        assert r_pol_ref["policy_context"]["requires_policy_review"] is False
+
+        print("[Test 12] Return policy retrieval")
+        r_pol_ret = orch.run("I want to return my order ORD002", db=db)
+        assert r_pol_ret["policy_context"] is not None
+        ret_cats = [p["category"] for p in r_pol_ret["policy_context"]["matched_policies"]]
+        assert "return" in ret_cats
+
+        print("[Test 13] Replacement policy retrieval")
+        r_pol_rep = orch.run("My product is damaged. I want a replacement for ORD004", db=db)
+        assert r_pol_rep["policy_context"] is not None
+        rep_cats = [p["category"] for p in r_pol_rep["policy_context"]["matched_policies"]]
+        assert "replacement" in rep_cats
+
+        print("[Test 14] Delivery policy retrieval")
+        r_pol_del = orch.run("My order ORD001 is late. What is the delivery status?", db=db)
+        assert r_pol_del["policy_context"] is not None
+        del_cats = [p["category"] for p in r_pol_del["policy_context"]["matched_policies"]]
+        assert "delivery" in del_cats
+
+        print("[Test 15] Payment policy retrieval")
+        r_pol_pay = orch.run("My payment failed but money was deducted from my bank", db=db)
+        assert r_pol_pay["policy_context"] is not None
+        pay_cats = [p["category"] for p in r_pol_pay["policy_context"]["matched_policies"]]
+        assert "payment" in pay_cats
+
+        print("[Test 16] Account policy retrieval")
+        r_pol_acc = orch.run("I cannot login to my account and need password reset", db=db)
+        assert r_pol_acc["policy_context"] is not None
+        acc_cats = [p["category"] for p in r_pol_acc["policy_context"]["matched_policies"]]
+        assert "account" in acc_cats
+
+        print("[Test 17] Unrelated low-confidence query handling without DB mutation")
+        r_pol_low = orch.run("What is the weather today?", db=db)
+        assert r_pol_low["policy_context"] is not None
+        assert r_pol_low["policy_context"]["requires_policy_review"] is True
+        assert r_pol_low["status"] in ("NEEDS_CLARIFICATION", "ESCALATED")
+        assert len(r_pol_low["completed_actions"]) == 0
+
+        # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
         print("\n=================================================")
-        print("  Orchestrator Tests Passed: 10/10")
+        print("  Orchestrator Tests Passed: 17/17")
         print("=================================================\n")
+
+
 
     finally:
         db.close()
@@ -142,3 +191,4 @@ def test_orchestrator_suite():
 
 if __name__ == "__main__":
     test_orchestrator_suite()
+

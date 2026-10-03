@@ -20,8 +20,10 @@ import re
 from typing import Any
 from sqlalchemy.orm import Session
 
+from knowledge import PolicyRetriever
 from agents.state import AgentState, ActionItem, OrchestrationStatus
 from backend.database import SessionLocal
+
 from backend.services.refund_service import (
     check_refund_eligibility,
     process_refund,
@@ -156,7 +158,22 @@ class Orchestrator:
             state.product_id = _extract_product_id(user_message)
             state.reason = _extract_reason(user_message)
 
-            # 3. Required Information Check
+            # 3. Policy Retrieval Stage
+            state.status = OrchestrationStatus.POLICY_RETRIEVAL
+            policy_ctx = PolicyRetriever.retrieve_policy(user_message)
+            state.policy_context = policy_ctx
+
+            # Handle unrelated query / low confidence without policy hallucination or DB mutation
+            if state.intent == "unknown" and policy_ctx.requires_policy_review:
+                state.status = OrchestrationStatus.NEEDS_CLARIFICATION
+                state.final_response = (
+                    "I can currently help with orders, payments, deliveries, "
+                    "returns, replacements, and account queries. Could you please provide more details "
+                    "about your issue?"
+                )
+                return self._build_result(state)
+
+            # 4. Required Information Check
             if state.intent in ("refund", "return", "replacement", "order", "payment", "delivery") and not state.order_id:
                 state.status = OrchestrationStatus.NEEDS_CLARIFICATION
                 state.final_response = (
@@ -171,13 +188,13 @@ class Orchestrator:
                 )
                 return self._build_result(state)
 
-            # 4. Plan Creation
+            # 5. Plan Creation
             self._create_plan(state)
 
-            # 5. Execute Plan
+            # 6. Execute Plan
             self._execute_plan(state, active_db)
 
-            # 6. Safety check & Escalation fallback
+            # 7. Safety check & Escalation fallback
             if state.status not in (
                 OrchestrationStatus.RESOLVED,
                 OrchestrationStatus.NEEDS_CLARIFICATION,
@@ -186,6 +203,7 @@ class Orchestrator:
                 self._escalate(state, active_db, "Workflow completed without clean resolution.")
 
             return self._build_result(state)
+
 
         finally:
             if local_session and active_db:
@@ -481,8 +499,10 @@ class Orchestrator:
             "order_id": state.order_id,
             "completed_actions": [a["action"] for a in state.completed_actions],
             "verification": state.verification_result or {"verified": state.status == OrchestrationStatus.RESOLVED},
+            "policy_context": state.policy_context.model_dump() if state.policy_context else None,
             "final_response": state.final_response,
             "ticket_id": state.ticket_id,
             "escalation_reason": state.escalation_reason,
             "state": state.to_dict(),
         }
+

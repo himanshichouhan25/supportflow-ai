@@ -21,6 +21,11 @@ from backend.database import Base, engine, get_db
 from backend.routers.refund import router as refund_router
 from backend.routers.replacement import router as replacement_router
 from backend.routers.return_request import router as return_router
+from backend.routers.support import router as support_router, v1_router as v1_support_router
+from backend.routers.orders import router as orders_router
+from backend.routers.products import router as products_router
+from backend.routers.tickets import router as tickets_router
+from backend.routers.dashboard import router as dashboard_router
 
 # ---------------------------------------------------------------------------
 # Application
@@ -31,10 +36,16 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Register support resolution routers
+# Register routers
 app.include_router(refund_router)
 app.include_router(return_router)
 app.include_router(replacement_router)
+app.include_router(support_router)
+app.include_router(v1_support_router)
+app.include_router(orders_router)
+app.include_router(products_router)
+app.include_router(tickets_router)
+app.include_router(dashboard_router)
 
 # ---------------------------------------------------------------------------
 # Startup — create tables if they don't already exist

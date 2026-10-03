@@ -61,6 +61,26 @@ def create_support_ticket(
     if not cleaned_issue:
         raise ValueError("Support ticket issue cannot be empty.")
 
+    # Duplicate ticket protection: check if an OPEN ticket already exists
+    if order_id or customer_id:
+        query = db.query(SupportTicket).filter(SupportTicket.status == "OPEN")
+        if order_id:
+            query = query.filter(SupportTicket.order_id == order_id)
+        elif customer_id:
+            query = query.filter(SupportTicket.customer_id == customer_id)
+
+        existing = query.order_by(SupportTicket.id.desc()).first()
+        if existing:
+            return {
+                "ticket_id": existing.ticket_id,
+                "customer_id": existing.customer_id,
+                "order_id": existing.order_id,
+                "issue": existing.issue,
+                "status": existing.status,
+                "created_at": existing.created_at,
+                "already_exists": True,
+            }
+
     ticket_id = _generate_ticket_id(db)
 
     ticket = SupportTicket(
@@ -82,7 +102,9 @@ def create_support_ticket(
         "issue": ticket.issue,
         "status": ticket.status,
         "created_at": ticket.created_at,
+        "already_exists": False,
     }
+
 
 
 def get_support_ticket(

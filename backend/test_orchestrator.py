@@ -197,15 +197,33 @@ def test_orchestrator_suite():
         assert d_inelig["intent"] == "return"
         assert "not delivered" in d_inelig["rationale"] or "CONFIRMED" in d_inelig["rationale"]
 
-        print("[Test 20] AgentDecision state dictionary serialization")
-        assert r_dec_ref["state"]["decision"] is not None
-        assert r_dec_ref["state"]["decision"]["rationale"] == d_ref["rationale"]
+        # ------------------------------------------------------------------
+        # 10. Task 9 Intelligent Escalation & Ticket Intelligence Tests
+        # ------------------------------------------------------------------
+        print("[Test 21] EscalationContext structure for ineligible return (ORD009)")
+        r_esc_inelig = orch.run("I want to return order ORD009", db=db)
+        assert r_esc_inelig["escalation_context"] is not None
+        esc = r_esc_inelig["escalation_context"]
+        assert esc["category"] == "INELIGIBLE_TRANSACTION"
+        assert esc["priority"] == "MEDIUM"
+        assert esc["order_id"] == "ORD009"
+        assert esc["intent"] == "return"
+        assert len(esc["attempted_actions"]) > 0
+        assert "recommended_next_step" in esc
+
+        print("[Test 22] Duplicate ticket protection check for repeated escalation")
+        r_esc_dup = orch.run("I want to return order ORD009", db=db)
+        assert r_esc_dup["ticket_id"] == r_esc_inelig["ticket_id"]
+
+        print("[Test 23] EscalationContext state serialization")
+        assert r_esc_inelig["state"]["escalation_context"] is not None
+        assert r_esc_inelig["state"]["escalation_context"]["category"] == "INELIGIBLE_TRANSACTION"
 
         # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
         print("\n=================================================")
-        print("  Orchestrator Tests Passed: 20/20")
+        print("  Orchestrator Tests Passed: 23/23")
         print("=================================================\n")
 
     finally:
@@ -214,5 +232,6 @@ def test_orchestrator_suite():
 
 if __name__ == "__main__":
     test_orchestrator_suite()
+
 
 

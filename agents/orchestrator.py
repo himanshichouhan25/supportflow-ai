@@ -21,9 +21,18 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from knowledge import PolicyRetriever
-from agents.state import AgentState, ActionItem, AgentDecision, OrchestrationStatus
+from agents.state import (
+    AgentState,
+    ActionItem,
+    AgentDecision,
+    EscalationContext,
+    EscalationCategory,
+    TicketPriority,
+    OrchestrationStatus,
+)
 from backend.database import SessionLocal
 from backend.models.order import Order
+
 
 from backend.services.refund_service import (
     check_refund_eligibility,
@@ -125,11 +134,81 @@ def _extract_reason(message: str) -> str | None:
     return None
 
 
+def _determine_escalation_category(
+    reason: str,
+    intent: str,
+    tool_result: dict[str, Any] | None = None,
+    verification_result: dict[str, Any] | None = None,
+    policy_context: Any = None,
+) -> EscalationCategory:
+    lower_reason = reason.lower()
+
+    if verification_result and not verification_result.get("success"):
+        return EscalationCategory.VERIFICATION_FAILED
+
+    if tool_result and tool_result.get("eligible") is False:
+        return EscalationCategory.INELIGIBLE_TRANSACTION
+
+    if "not eligible" in lower_reason or "ineligible" in lower_reason or "only eligible" in lower_reason or "not delivered" in lower_reason or "cannot be" in lower_reason:
+        return EscalationCategory.INELIGIBLE_TRANSACTION
+
+    if "missing" in lower_reason or "provide" in lower_reason or "order id is required" in lower_reason:
+        return EscalationCategory.MISSING_REQUIRED_INFORMATION
+
+    if "insufficient" in lower_reason or "policy review" in lower_reason or (policy_context and policy_context.requires_policy_review):
+        return EscalationCategory.POLICY_COVERAGE_INSUFFICIENT
+
+    if tool_result and not tool_result.get("success"):
+        return EscalationCategory.ACTION_FAILED
+
+    if "failed" in lower_reason or "error" in lower_reason:
+        return EscalationCategory.ACTION_FAILED
+
+    return EscalationCategory.MANUAL_REVIEW_REQUIRED
+
+
+
+def _determine_escalation_priority(
+    category: EscalationCategory,
+    intent: str,
+    verification_failed: bool = False,
+) -> TicketPriority:
+    if verification_failed or category == EscalationCategory.VERIFICATION_FAILED:
+        return TicketPriority.HIGH
+
+    if intent in ("refund", "payment") or category == EscalationCategory.ACTION_FAILED:
+        return TicketPriority.HIGH
+
+    if intent in ("return", "replacement", "delivery") or category == EscalationCategory.INELIGIBLE_TRANSACTION:
+        return TicketPriority.MEDIUM
+
+    if category in (EscalationCategory.MISSING_REQUIRED_INFORMATION, EscalationCategory.POLICY_COVERAGE_INSUFFICIENT):
+        return TicketPriority.LOW
+
+    return TicketPriority.MEDIUM
+
+
+def _determine_recommended_next_step(category: EscalationCategory, intent: str, reason: str) -> str:
+    if category == EscalationCategory.INELIGIBLE_TRANSACTION:
+        return f"Inspect order status for {intent.upper()} request and evaluate manual policy exception."
+    if category == EscalationCategory.POLICY_COVERAGE_INSUFFICIENT:
+        return "Review customer inquiry against policy knowledge base and update guidelines."
+    if category == EscalationCategory.MISSING_REQUIRED_INFORMATION:
+        return "Contact customer to verify missing order ID or account credentials."
+    if category == EscalationCategory.ACTION_FAILED:
+        return f"Investigate system transaction failure for {intent.upper()} action."
+    if category == EscalationCategory.VERIFICATION_FAILED:
+        return f"Manually verify database records and confirm {intent.upper()} state."
+    return "Human support agent review required."
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator Class
 # ---------------------------------------------------------------------------
 
 class Orchestrator:
+    ...
+
     """Central Workflow Orchestrator for SupportFlow AI."""
 
     def __init__(self, db: Session | None = None) -> None:
@@ -313,10 +392,14 @@ class Orchestrator:
         plan: list[ActionItem] = []
 
         primary = state.intent
+        if "refund" in state.user_request.lower():
+            primary = "refund"
+
         if primary in ("refund", "return", "replacement"):
             intents_to_plan = [primary]
         else:
             intents_to_plan = state.intents if state.intents else ([primary] if primary else [])
+
 
         for intent in intents_to_plan:
             if intent == "refund":
@@ -572,13 +655,61 @@ class Orchestrator:
         )
 
     def _escalate(self, state: AgentState, db: Session, reason: str) -> None:
-        """Escalate unresolved request by creating a support ticket."""
+        """Escalate unresolved request by creating a structured support ticket."""
         state.status = OrchestrationStatus.ESCALATED
         state.escalation_reason = reason
 
+        category = _determine_escalation_category(
+            reason=reason,
+            intent=state.intent,
+            tool_result=state.tool_result,
+            verification_result=state.verification_result,
+            policy_context=state.policy_context,
+        )
+        verification_failed = bool(state.verification_result and not state.verification_result.get("success"))
+        priority = _determine_escalation_priority(category, state.intent, verification_failed)
+        next_step = _determine_recommended_next_step(category, state.intent, reason)
+
+        attempted_raw = ["policy_retrieval", "agent_decision"] + [a["action"] for a in state.completed_actions]
+        attempted_actions: list[str] = []
+        for act in attempted_raw:
+            if act not in attempted_actions:
+                attempted_actions.append(act)
+
+        policy_id = state.policy_context.top_policy.category if (state.policy_context and state.policy_context.top_policy) else None
+        policy_confidence = state.policy_context.retrieval_confidence if state.policy_context else 0.0
+        policy_supported = state.decision.policy_supported if state.decision else False
+
+        esc_ctx = EscalationContext(
+            reason=reason,
+            category=category,
+            priority=priority,
+            customer_id=state.customer_id,
+            order_id=state.order_id,
+            intent=state.intent,
+            selected_agent=state.decision.selected_agent if state.decision else state.intent,
+            selected_action=state.decision.selected_action if state.decision else None,
+            policy_id=policy_id,
+            policy_confidence=policy_confidence,
+            policy_supported=policy_supported,
+            attempted_actions=attempted_actions,
+            last_action_result=state.tool_result,
+            verification_result=state.verification_result,
+            recommended_next_step=next_step,
+        )
+        state.escalation_context = esc_ctx
+
+        issue_str = (
+            f"[{category.value}] [{priority.value}] {reason} | "
+            f"Intent: {state.intent} | Order: {state.order_id or 'N/A'} | "
+            f"Agent: {esc_ctx.selected_agent} | Action: {esc_ctx.selected_action} | "
+            f"Policy: {esc_ctx.policy_id or 'None'} | Attempted: {attempted_actions} | "
+            f"Next Step: {next_step}"
+        )
+
         ticket = create_support_ticket(
             db=db,
-            issue=f"[{state.intent.upper()} ESCALATION] {reason} | Request: '{state.user_request}'",
+            issue=issue_str,
             customer_id=state.customer_id,
             order_id=state.order_id,
         )
@@ -586,7 +717,7 @@ class Orchestrator:
         state.ticket_id = ticket.get("ticket_id")
         state.final_response = (
             f"I was unable to resolve your request automatically: {reason}\n\n"
-            f"I have created a support ticket ({state.ticket_id}) for our team to assist you further."
+            f"I have created a support ticket ({state.ticket_id}, Priority: {priority.value}) for our team to assist you further."
         )
 
     def _build_result(self, state: AgentState) -> dict[str, Any]:
@@ -600,10 +731,12 @@ class Orchestrator:
             "verification": state.verification_result or {"verified": state.status == OrchestrationStatus.RESOLVED},
             "policy_context": state.policy_context.model_dump() if state.policy_context else None,
             "decision": state.decision.model_dump() if state.decision else None,
+            "escalation_context": state.escalation_context.model_dump() if state.escalation_context else None,
             "final_response": state.final_response,
             "ticket_id": state.ticket_id,
             "escalation_reason": state.escalation_reason,
             "state": state.to_dict(),
         }
+
 
 

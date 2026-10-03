@@ -31,6 +31,22 @@ class ActionItem(BaseModel):
     completed: bool = False
 
 
+class EscalationCategory(str, Enum):
+    INELIGIBLE_TRANSACTION = "INELIGIBLE_TRANSACTION"
+    POLICY_COVERAGE_INSUFFICIENT = "POLICY_COVERAGE_INSUFFICIENT"
+    MISSING_REQUIRED_INFORMATION = "MISSING_REQUIRED_INFORMATION"
+    ACTION_FAILED = "ACTION_FAILED"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+    DUPLICATE_OR_ALREADY_RESOLVED = "DUPLICATE_OR_ALREADY_RESOLVED"
+
+
+class TicketPriority(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
 class AgentDecision(BaseModel):
     intent: str
     goal: str
@@ -42,6 +58,24 @@ class AgentDecision(BaseModel):
     transactional_check_required: bool = True
     requires_clarification: bool = False
     requires_escalation: bool = False
+
+
+class EscalationContext(BaseModel):
+    reason: str
+    category: EscalationCategory = EscalationCategory.MANUAL_REVIEW_REQUIRED
+    priority: TicketPriority = TicketPriority.MEDIUM
+    customer_id: str | None = None
+    order_id: str | None = None
+    intent: str = "unknown"
+    selected_agent: str | None = None
+    selected_action: str | None = None
+    policy_id: str | None = None
+    policy_confidence: float = 0.0
+    policy_supported: bool = False
+    attempted_actions: list[str] = Field(default_factory=list)
+    last_action_result: dict[str, Any] | None = None
+    verification_result: dict[str, Any] | None = None
+    recommended_next_step: str = "Human support agent review required."
 
 
 class AgentState(BaseModel):
@@ -64,6 +98,7 @@ class AgentState(BaseModel):
     verification_result: dict[str, Any] | None = None
     policy_context: PolicyContext | None = None
     decision: AgentDecision | None = None
+    escalation_context: EscalationContext | None = None
 
     attempt_count: int = 0
     max_attempts: int = 3
@@ -104,6 +139,7 @@ class AgentState(BaseModel):
             "verification_result": self.verification_result,
             "policy_context": self.policy_context.model_dump() if self.policy_context else None,
             "decision": self.decision.model_dump() if self.decision else None,
+            "escalation_context": self.escalation_context.model_dump() if self.escalation_context else None,
             "attempt_count": self.attempt_count,
             "max_attempts": self.max_attempts,
             "status": self.status.value if isinstance(self.status, OrchestrationStatus) else str(self.status),
@@ -111,5 +147,6 @@ class AgentState(BaseModel):
             "ticket_id": self.ticket_id,
             "final_response": self.final_response,
         }
+
 
 

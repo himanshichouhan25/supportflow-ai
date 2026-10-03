@@ -35,6 +35,7 @@ from agents.order_agent import run as run_order
 from agents.payment_agent import run as run_payment
 from agents.delivery_agent import run as run_delivery
 from agents.account_agent import run as run_account
+from agents.return_agent import run as run_return
 from backend.database import SessionLocal
 from backend.services.support_ticket_service import create_support_ticket
 
@@ -92,6 +93,26 @@ _ACCOUNT_KW = {
     "contact",
 }
 
+_RETURN_KW = {
+    "return",
+    "returning",
+    "sendback",
+    "damaged",
+    "defective",
+}
+
+# Product-support phrases used by the customer-facing "Get Support" button.
+# These requests usually contain a product name but no explicit order/payment/
+# delivery keyword, e.g. "I need help with Syska LED Smart Bulb 9W."
+_PRODUCT_SUPPORT_PHRASES = (
+    "need help with",
+    "help with",
+    "issue with",
+    "problem with",
+    "support for",
+    "help regarding",
+)
+
 
 # ---------------------------------------------------------------------------
 # Intent detection
@@ -103,24 +124,28 @@ def _detect_intents(message: str) -> list[str]:
     ordered by priority.
 
     Priority:
-        payment > order > delivery > account
+        return > payment > order > delivery > account
 
     Returns at least one intent; falls back to 'unknown'.
     """
 
-    lower = set(re.findall(r"[a-z]+", message.lower()))
+    lower_tokens = set(re.findall(r"[a-z]+", message.lower()))
     found: list[str] = []
 
-    if lower & _PAYMENT_KW:
+    # Check multi-word phrase for "send back"
+    if lower_tokens & _RETURN_KW or "send back" in message.lower():
+        found.append("return")
+
+    if lower_tokens & _PAYMENT_KW:
         found.append("payment")
 
-    if lower & _ORDER_KW:
+    if lower_tokens & _ORDER_KW:
         found.append("order")
 
-    if lower & _DELIVERY_KW:
+    if lower_tokens & _DELIVERY_KW:
         found.append("delivery")
 
-    if lower & _ACCOUNT_KW:
+    if lower_tokens & _ACCOUNT_KW:
         found.append("account")
 
     # De-duplicate while preserving order
@@ -131,6 +156,17 @@ def _detect_intents(message: str) -> list[str]:
         if intent not in seen:
             unique.append(intent)
             seen.add(intent)
+
+    # Product Details -> Get Support sends messages such as:
+    # "I need help with Syska LED Smart Bulb 9W."
+    # The product name itself may not contain an order/payment/delivery
+    # keyword, so route this customer-facing product-support request to
+    # the OrderAgent. The OrderAgent will then ask for an order ID before
+    # accessing any order data.
+    if not unique:
+        normalised_message = message.lower().strip()
+        if any(phrase in normalised_message for phrase in _PRODUCT_SUPPORT_PHRASES):
+            return ["order"]
 
     return unique if unique else ["unknown"]
 
@@ -224,6 +260,7 @@ def _call_specialist(
         "payment": run_payment,
         "delivery": run_delivery,
         "account": run_account,
+        "return": run_return,
     }
 
     fn = DISPATCH.get(intent)
@@ -234,8 +271,8 @@ def _call_specialist(
             "message": f"No specialist for intent '{intent}'.",
         }
 
-    # Order/payment/delivery require an order ID.
-    _needs_order_id = intent in ("order", "payment", "delivery")
+    # Order/payment/delivery/return require an order ID.
+    _needs_order_id = intent in ("order", "payment", "delivery", "return")
 
     if _needs_order_id and _extract_order_id(message) is None:
         clarification = (
@@ -574,6 +611,36 @@ def _build_account_text(tr: dict[str, Any]) -> str:
     ).strip()
 
 
+def _build_return_text(tr: dict[str, Any], action: str) -> str:
+
+    oid = tr.get("order_id", "")
+    ret_id = tr.get("return_id", "")
+    status = tr.get("status", "").upper()
+    reason = tr.get("reason", "")
+
+    if action == "create_return_request":
+        return (
+            f"Your return request for order **{oid}** has been successfully registered.\n\n"
+            f"Return ID: **{ret_id}**\n"
+            f"Status: **{status}**"
+        )
+
+    if action == "verify_return" or tr.get("already_exists"):
+        return (
+            f"A return request for order **{oid}** already exists in our system.\n\n"
+            f"Return ID: **{ret_id}**\n"
+            f"Status: **{status}**"
+        )
+
+    if action == "check_return_eligibility":
+        eligible = tr.get("eligible")
+        if eligible:
+            return f"Order **{oid}** is eligible for product return.\n\n{reason}"
+        return f"Order **{oid}** is not eligible for return.\n\n{reason}"
+
+    return f"Return request details for order **{oid}**: Return ID **{ret_id}**, Status: **{status}**."
+
+
 # ---------------------------------------------------------------------------
 # Final response builder
 # ---------------------------------------------------------------------------
@@ -626,20 +693,47 @@ def _build_response(
                     _build_account_text(tr)
                 )
 
+            elif "Return" in agent:
+                fact_lines.append(
+                    _build_return_text(tr, action)
+                )
+
         facts = "\n\n".join(fact_lines)
 
         prompt = (
-            "You are a helpful, professional customer support agent "
-            "for ShopKart, an Indian e-commerce platform.\n\n"
+            "You are a helpful, professional, and empathetic AI customer support assistant "
+            "for SupportFlow AI.\n\n"
             f"The customer said: '{user_message}'\n\n"
             f"Verified facts from our system:\n{facts}\n\n"
-            "Using ONLY the verified facts above, write a clear, "
-            "natural, and polite customer-support response addressing "
-            "the customer directly. "
-            "Do NOT invent amounts, dates, policies, or guarantees "
-            "not in the facts. "
-            "Do NOT mention agents, tools, or system internals. "
-            "Keep the response under 100 words."
+            "Using ONLY the verified facts above, write a highly structured, professional "
+            "customer-support response addressing the customer directly.\n\n"
+            "You MUST use this EXACT Markdown layout, including the emojis and headings:\n\n"
+            "**🎯 [A brief 1-sentence summary of the outcome/status]**\n\n"
+            "**📦 Order** (include ONLY if order facts exist)\n"
+            "**Order ID:** [ID]\n"
+            "**Product:** [Product if known]\n"
+            "**Status:** [STATUS]\n\n"
+            "**💳 Payment** (include ONLY if payment facts exist)\n"
+            "**Status:** [STATUS]\n"
+            "**Amount:** [Amount if known]\n"
+            "**Method:** [Method if known]\n\n"
+            "**🚚 Delivery** (include ONLY if delivery/tracking facts exist)\n"
+            "**Status:** [STATUS]\n\n"
+            "**🔎 What We Found**\n"
+            "[A clear 1-2 sentence explanation of the situation based on the facts.]\n\n"
+            "**🎫 Support** (include ONLY if a ticket was created in the facts)\n"
+            "I've created a support ticket so our support team can review your request.\n"
+            "Ticket ID: [Real Ticket ID from facts]\n"
+            "Status: OPEN\n\n"
+            "**💡 Next Step**\n"
+            "[Clear instructions or reassurance on what the customer should do next.]\n\n"
+            "CRITICAL RULES:\n"
+            "- Do NOT include empty sections (e.g., if there's no payment data, skip the 💳 Payment section entirely).\n"
+            "- Do NOT invent or hallucinate any amounts, dates, tracking numbers, or statuses not present in the facts.\n"
+            "- If a Support Ticket was created, you MUST output 'Ticket ID: TKT-XXXX' so our system can detect it.\n"
+            "- Do NOT mention internal agents, tools, databases, or replanning steps (e.g. 'Coordinator Agent', 'Payment Agent').\n"
+            "- Keep the response concise, punchy, and extremely easy to scan using the bold labels above.\n"
+            "- Use the provided facts as the single source of truth."
         )
 
         return llm.call(prompt)
@@ -683,6 +777,11 @@ def _build_response(
         elif "AccountAgent" in agent:
             parts.append(
                 _build_account_text(tr)
+            )
+
+        elif "ReturnAgent" in agent:
+            parts.append(
+                _build_return_text(tr, action)
             )
 
     # Remove consecutive duplicate messages.
@@ -1093,4 +1192,5 @@ def run_coordinator(
 
         if _own_session and db is not None:
             db.close()
+
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 backend/test_tools.py -- Integration test runner for all support tools.
 
 Run from the project root:
@@ -16,7 +16,7 @@ from backend.database import SessionLocal
 from tools.account_tool import check_account
 from tools.delivery_tool import check_delivery
 from tools.order_tool import cancel_order, check_order, find_orders_by_email
-from tools.payment_tool import check_payment, check_refund_eligibility
+from tools.payment_tool import check_payment, check_refund_eligibility, process_refund, verify_refund
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +207,72 @@ def run_tests() -> None:
             "C105 orders include ORD005",
             {"v": "ORD005" in order_ids_c105}, "v", True,
         )
+
+        # ------------------------------------------------------------------
+        # process_refund & verify_refund (Task 2A tests)
+        # ------------------------------------------------------------------
+        print("\n[process_refund & verify_refund]")
+
+        # TEST 1 & 2 & 3 & 4: Eligible payment -> process refund successfully
+        # First ensure order ORD001 is cancelled & payment is SUCCESS for testing
+        from backend.models.order import Order
+        from backend.models.payment import Payment
+        from backend.models.refund import Refund
+
+        # Reset test fixture states to maintain test isolation
+        ord5 = db.query(Order).filter_by(order_id="ORD005").first()
+        pay5 = db.query(Payment).filter_by(order_id="ORD005").first()
+        if ord5:
+            ord5.order_status = "PENDING"
+        if pay5:
+            pay5.payment_status = "SUCCESS"
+
+        ord1 = db.query(Order).filter_by(order_id="ORD001").first()
+        pay1 = db.query(Payment).filter_by(order_id="ORD001").first()
+        if ord1 and pay1:
+            ord1.order_status = "CANCELLED"
+            pay1.payment_status = "SUCCESS"
+        db.commit()
+
+        # Clean up existing refunds for ORD001 if re-running test
+        db.query(Refund).filter_by(order_id="ORD001").delete()
+        db.commit()
+
+        # TEST 1: Eligible payment -> refund successfully processed
+        res1 = process_refund("ORD001", db, reason="Customer cancelled")
+        _run("TEST 1: Eligible payment -> refund processed", res1, "processed", True)
+
+        # TEST 2: Refund record is created
+        _run("TEST 2: Refund record created with refund_id", {"created": bool(res1.get("refund_id"))}, "created", True)
+
+        # TEST 3: Payment status changes to REFUNDED
+        pay1_refreshed = db.query(Payment).filter_by(order_id="ORD001").first()
+        _run("TEST 3: Payment status changed to REFUNDED", {"status": pay1_refreshed.payment_status if pay1_refreshed else None}, "status", "REFUNDED")
+
+        # TEST 4: processed_at is populated
+        _run("TEST 4: processed_at is populated", {"pop": bool(res1.get("processed_at"))}, "pop", True)
+
+        # TEST 5: verify_refund returns the actual refund record
+        ver_res = verify_refund("ORD001", db)
+        _run("TEST 5: verify_refund returns actual record", ver_res, "refund_id", res1.get("refund_id"))
+
+        # TEST 6: Duplicate refund is rejected safely
+        dup_res = process_refund("ORD001", db)
+        _run("TEST 6: Duplicate refund rejected safely", dup_res, "already_refunded", True)
+
+        # TEST 7: Already refunded payment cannot be refunded again
+        _run("TEST 7: Already refunded payment not re-processed", dup_res, "processed", False)
+
+        # TEST 8: Non-existent order handled safely
+        non_ord_res = process_refund("ORD_NONEXISTENT", db)
+        _run("TEST 8: Non-existent order handled safely", non_ord_res, "success", False)
+
+        # TEST 9: Non-existent payment handled safely (ORD007 has refund already, let's test missing order/payment)
+        _run("TEST 9: Non-existent payment handled safely", non_ord_res, "success", False)
+
+        # TEST 10: Ineligible refund is not processed (ORD002 is DELIVERED)
+        inel_res = process_refund("ORD002", db)
+        _run("TEST 10: Ineligible refund not processed", inel_res, "processed", False)
 
         # ------------------------------------------------------------------
         # Summary

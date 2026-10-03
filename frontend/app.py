@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 frontend/app.py — SupportFlow AI customer-facing Streamlit app.
 
@@ -32,7 +32,6 @@ from frontend.components import (
     render_followup_input,
     render_product_card,
     render_resolution,
-    render_sidebar,
     validate_customer_id,
     validate_order_id,
 )
@@ -54,6 +53,9 @@ st.set_page_config(
 )
 
 
+if "custom_sidebar_open" not in st.session_state:
+    st.session_state.custom_sidebar_open = True
+
 # ---------------------------------------------------------------------------
 # Custom styling
 # ---------------------------------------------------------------------------
@@ -61,27 +63,345 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    /* Premium SaaS overrides */
+    :root {
+        --primary-color: #5146C7;
+        --border-color: #E2E0DC;
+        --sidebar-border: #D9D7EA;
+    }
+    
+    /* Global Backgrounds */
+    [data-testid="stAppViewContainer"] {
+        background-color: #FAF9F6 !important;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #E9E7F8 !important;
+        border-right: 1px solid var(--sidebar-border) !important;
+    }
+    
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-        max-width: 1180px;
+        padding-top: 1rem;
+        padding-bottom: 4rem;
+        max-width: 1000px;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    /* Header visibility overrides */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        box-shadow: none !important;
+    }
+    
+    [data-testid="stToolbar"], .stAppDeployButton {
+        visibility: hidden !important;
+    }
+    
+    /* Hide all native sidebar toggle elements */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"] {
+        display: none !important;
     }
 
-    .product-price {
-        font-size: 1.6rem;
-        font-weight: 700;
+    /* Custom Expand Button Styling */
+    div:has(> #expand-button-hook) + div.stButton {
+        position: fixed !important;
+        top: 1rem !important;
+        left: 1rem !important;
+        z-index: 999999 !important;
+    }
+    div:has(> #expand-button-hook) + div.stButton button {
+        background: #FFFFFF !important;
+        border: 1px solid #D6D3E8 !important;
+        color: #4338A8 !important;
+        border-radius: 8px !important;
+        width: 36px !important;
+        height: 36px !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+    }
+    div:has(> #expand-button-hook) + div.stButton button:hover {
+        background: #F1F0FA !important;
+    }
+    div:has(> #expand-button-hook) + div.stButton button p {
+        font-size: 1.2rem !important;
+        font-weight: 800 !important;
+        margin: 0 !important;
+        color: #4338A8 !important;
     }
 
-    .product-meta {
-        color: #a0a0aa;
-        font-size: 0.95rem;
+    /* Custom Collapse Button Styling */
+    div:has(> #collapse-button-hook) + div.stButton button {
+        background: transparent !important;
+        border: none !important;
+        color: #5F6680 !important;
+        width: auto !important;
+        padding: 0 !important;
+        float: right;
+        box-shadow: none !important;
+    }
+    div:has(> #collapse-button-hook) + div.stButton button:hover {
+        background: transparent !important;
+        transform: scale(1.1);
+    }
+    div:has(> #collapse-button-hook) + div.stButton button p {
+        font-size: 1.2rem !important;
+        font-weight: 800 !important;
+        color: #5F6680 !important;
     }
 
-    .order-card {
-        padding: 1rem;
-        border-radius: 14px;
-        border: 1px solid rgba(128, 128, 128, 0.25);
-        margin-bottom: 1rem;
+    
+    /* Ensure all text has good contrast */
+    h1, h2, h3, h4, h5, h6 {
+        color: #172033 !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.02em;
+    }
+    p, span, div {
+        color: #172033;
+    }
+    
+    /* Cards and Containers */
+    div[data-testid="stVerticalBlock"] > div[style*="border"] {
+        background: #FFFFFF !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.03) !important;
+        padding: 1.5rem !important;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    
+    /* SECTION HOOKS */
+    div[style*="border"]:has(#shop-header-hook) {
+        background-color: #FFF4E6 !important;
+        border-color: #FFE5CC !important;
+    }
+    div[style*="border"]:has(#shop-search-hook) {
+        background-color: #EEF6FF !important;
+        border-color: #DDEBFF !important;
+    }
+    div[style*="border"]:has(#my-orders-hook) {
+        background-color: #EAF4FF !important;
+        border-color: #DDEBFF !important;
+    }
+    div[style*="border"]:has(#ai-support-hook) {
+        background-color: #F0E9FF !important;
+        border-color: #DCC7F5 !important;
+    }
+    div[style*="border"]:has(#ai-input-hook) {
+        background-color: #F3F1FF !important;
+        border-color: #D8D4F0 !important;
+    }
+    div[style*="border"]:has(#resolution-hook) {
+        background-color: #EEF9F4 !important;
+        border-color: #CCF0E1 !important;
+    }
+    
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] {
+        background: #E8F1FF !important;
+        padding: 1rem !important;
+        border-radius: 12px !important;
+        margin-bottom: 1.5rem !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="secondary"]:hover {
+        background: #DDE7FF !important;
+    }
+    
+    /* Primary Buttons */
+    button[kind="primary"] {
+        background: #5146C7 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        padding: 0.5rem 1rem !important;
+        box-shadow: 0 4px 6px -1px rgba(81, 70, 199, 0.4) !important;
+    }
+    button[kind="primary"]:hover {
+        background: #4338A8 !important;
+        box-shadow: 0 6px 8px -1px rgba(81, 70, 199, 0.5) !important;
+        transform: translateY(-1px);
+        color: #FFFFFF !important;
+    }
+    button[kind="primary"] p {
+        color: #FFFFFF !important;
+    }
+    
+    /* Secondary Buttons */
+    button[kind="secondary"] {
+        background: #FFFFFF !important;
+        color: #374151 !important;
+        border: 1px solid #D6D3E8 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
+    button[kind="secondary"]:hover {
+        background: #F1F0FA !important;
+        border-color: #D6D3E8 !important;
+        color: #374151 !important;
+    }
+    button[kind="secondary"] p {
+        color: #374151 !important;
+    }
+    
+    /* AI Quick Action Buttons */
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s ease;
+        color: #172033 !important;
+        border: none !important;
+    }
+    
+    /* Specific Quick Actions Colors */
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {
+        background: #E8F1FF !important;
+    }
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {
+        background: #FCEFF5 !important;
+    }
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] > div:nth-child(3) button {
+        background: #FFF1E6 !important;
+    }
+
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] button:hover {
+        filter: brightness(0.95);
+        color: #172033 !important;
+    }
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] button:active {
+        background: #5146C7 !important;
+        color: #FFFFFF !important;
+    }
+    div:has(> #ai-quick-actions-hook) ~ div[data-testid="stHorizontalBlock"] button p {
+        color: inherit !important;
+    }
+    
+    /* Text Input Area */
+    .stTextArea textarea {
+        background: #FFFFFF !important;
+        border: 1px solid #D6D3E8 !important;
+        border-radius: 12px !important;
+        font-size: 1.05rem !important;
+        padding: 1rem !important;
+        color: #172033 !important;
+        box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.02) !important;
+    }
+    .stTextArea textarea:focus {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 2px rgba(81, 70, 199, 0.2) !important;
+    }
+    .stTextArea textarea::placeholder {
+        color: #7B8498 !important;
+        opacity: 1 !important;
+    }
+    
+    .stTextInput input {
+        background: #FFFFFF !important;
+        border: 1px solid #D6D3E8 !important;
+        border-radius: 8px !important;
+        color: #172033 !important;
+    }
+    .stTextInput input:focus {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 2px rgba(81, 70, 199, 0.2) !important;
+    }
+    .stTextInput input::placeholder {
+        color: #7B8498 !important;
+        opacity: 1 !important;
+    }
+    
+    /* Enforce alert contrast */
+    [data-testid="stAlert"] {
+        color: #172033 !important;
+    }
+    [data-testid="stAlert"] * {
+        color: #172033 !important;
+    }
+
+    /* Sidebar Navigation overrides */
+    [data-testid="stSidebar"] {
+        border-right: 1px solid var(--sidebar-border) !important;
+    }
+    
+    [data-testid="stSidebar"] button[kind="primary"] {
+        background: #4338A8 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 2px 4px rgba(67, 56, 168, 0.2) !important;
+    }
+    [data-testid="stSidebar"] button[kind="primary"] p {
+        color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] button[kind="primary"]:hover {
+        background: #4338A8 !important;
+        color: #FFFFFF !important;
+        transform: none !important;
+    }
+    
+    [data-testid="stSidebar"] button[kind="secondary"] {
+        background: transparent !important;
+        color: #374151 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stSidebar"] button[kind="secondary"] p {
+        color: #374151 !important;
+    }
+    [data-testid="stSidebar"] button[kind="secondary"]:hover {
+        background: #DCD9F5 !important;
+        color: #374151 !important;
+    }
+    [data-testid="stSidebar"] button[kind="secondary"]:hover p {
+        color: #374151 !important;
+    }
+    [data-testid="stSidebar"] button p {
+        text-align: left !important;
+        flex-grow: 1;
+        margin-left: 0.5rem;
+    }
+
+    /* Main Window Navigation Bar */
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] {
+        background: #FFFFFF !important;
+        border: 1px solid #E5E2DC !important;
+        border-radius: 12px !important;
+        padding: 0.5rem !important;
+        margin-bottom: 2rem !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button {
+        width: 100% !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        padding: 0.5rem !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="secondary"] {
+        background: transparent !important;
+        border: none !important;
+        color: #475569 !important;
+        box-shadow: none !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="secondary"] p {
+        color: #475569 !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="secondary"]:hover {
+        background: #EEF2FF !important;
+        color: #5146C7 !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="secondary"]:hover p {
+        color: #5146C7 !important;
+    }
+    div:has(> #main-nav-hook) + div[data-testid="stVerticalBlock"] button[kind="primary"] {
+        background: #5146C7 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        box-shadow: none !important;
     }
     </style>
     """,
@@ -89,11 +409,7 @@ st.markdown(
 )
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
 
-render_sidebar()
 
 
 # ---------------------------------------------------------------------------
@@ -248,59 +564,46 @@ def _render_order_card(order: dict) -> None:
         top_left, top_right = st.columns([3, 1])
 
         with top_left:
-            st.markdown(f"### 🛍️ {product_name}")
-            st.caption(f"Order ID: **{order_id}**")
+            st.markdown(f"#### 🛍️ {product_name}")
+            st.markdown(f"<p style='color: #64748b; font-size: 0.85rem; margin-top: -10px;'>Order ID: <strong>{order_id}</strong></p>", unsafe_allow_html=True)
 
         with top_right:
             st.markdown(
-                f"### ₹{float(amount):,.2f}"
+                f"<h3 style='color: #0f172a; text-align: right; margin-top: 0;'>₹{float(amount):,.2f}</h3>",
+                unsafe_allow_html=True
             )
 
-        st.markdown("---")
+        st.markdown("<hr style='border-top: 1px solid #E2E0DC; margin: 0.5rem 0 1rem 0;'>", unsafe_allow_html=True)
+
+        def get_badge(status):
+            s = status.upper()
+            if s in ['SUCCESS', 'DELIVERED']: return f"<span style='background:#ECFDF3; color:#166534; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['PENDING', 'DELAYED']: return f"<span style='background:#FFF7D6; color:#92400E; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['FAILED']: return f"<span style='background:#FEF2F2; color:#B91C1C; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['REFUNDED', 'CANCELLED']: return f"<span style='background:#FEF2F2; color:#B91C1C; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['SHIPPED', 'OUT_FOR_DELIVERY', 'CONFIRMED']: return f"<span style='background:#EEF2FF; color:#4338A8; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['OPEN']: return f"<span style='background:#F3E8FF; color:#6B21A8; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            return f"<span style='background:#F1F5F9; color:#475569; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
 
         info_1, info_2, info_3 = st.columns(3)
 
         with info_1:
-            st.markdown("**Order Status**")
-
-            if order_status == "DELIVERED":
-                st.success(f"✅ {order_status}")
-            elif order_status == "CANCELLED":
-                st.error(f"❌ {order_status}")
-            elif order_status == "PENDING":
-                st.warning(f"⏳ {order_status}")
-            else:
-                st.info(f"📦 {order_status}")
+            st.markdown("<p style='color: #64748b; font-size: 0.85rem; margin-bottom: 4px;'>Order Status</p>", unsafe_allow_html=True)
+            st.markdown(get_badge(order_status), unsafe_allow_html=True)
 
         with info_2:
-            st.markdown("**Payment**")
-
-            if payment_status == "SUCCESS":
-                st.success(f"💳 {payment_status}")
-            elif payment_status == "FAILED":
-                st.error(f"❌ {payment_status}")
-            elif payment_status == "REFUNDED":
-                st.info(f"↩️ {payment_status}")
-            elif payment_status == "PENDING":
-                st.warning(f"⏳ {payment_status}")
+            st.markdown("<p style='color: #64748b; font-size: 0.85rem; margin-bottom: 4px;'>Payment</p>", unsafe_allow_html=True)
+            if payment_status != "Not available":
+                st.markdown(get_badge(payment_status), unsafe_allow_html=True)
             else:
-                st.caption("Not available")
+                st.markdown("<span style='color: #94a3b8; font-size: 0.85rem;'>Not available</span>", unsafe_allow_html=True)
 
         with info_3:
-            st.markdown("**Delivery**")
-
-            if delivery_status == "DELIVERED":
-                st.success(f"🚚 {delivery_status}")
-            elif delivery_status == "DELAYED":
-                st.warning(f"⚠️ {delivery_status}")
-            elif delivery_status == "SHIPPED":
-                st.info(f"🚚 {delivery_status}")
-            elif delivery_status == "OUT_FOR_DELIVERY":
-                st.info(f"📍 {delivery_status}")
-            elif delivery_status == "PENDING":
-                st.warning(f"⏳ {delivery_status}")
+            st.markdown("<p style='color: #64748b; font-size: 0.85rem; margin-bottom: 4px;'>Delivery</p>", unsafe_allow_html=True)
+            if delivery_status != "Not available":
+                st.markdown(get_badge(delivery_status), unsafe_allow_html=True)
             else:
-                st.caption("Not available")
+                st.markdown("<span style='color: #94a3b8; font-size: 0.85rem;'>Not available</span>", unsafe_allow_html=True)
 
         if order_date:
             st.caption(f"📅 Ordered on {order_date}")
@@ -347,60 +650,100 @@ def _render_order_card(order: dict) -> None:
 # Header
 # ---------------------------------------------------------------------------
 
-st.markdown("# 🧠 SupportFlow AI")
-st.caption("Smart shopping support powered by AI")
+st.markdown(
+    """
+    <div style="background-color: #EEF2FF; padding: 2rem; border-radius: 16px; text-align: center; margin-bottom: 1.5rem;">
+        <h2 style="color: #172033; font-weight: 800; margin-bottom: 0;">🧠 SupportFlow AI</h2>
+        <p style="color: #64748b; font-size: 1.05rem; margin-top: 0.25rem;">Smart shopping support powered by AI</p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+
+# ---------------------------------------------------------------------------
+# Main Window Navigation
+# ---------------------------------------------------------------------------
+
+st.markdown('<div id="main-nav-hook"></div>', unsafe_allow_html=True)
+nav_container = st.container()
+with nav_container:
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🛍 Shop", use_container_width=True, type="primary" if st.session_state.page == "shop" else "secondary", key="main_nav_shop"):
+            st.session_state.page = "shop"
+            st.session_state.selected_product_id = None
+            _reset_support_state()
+            _reset_my_orders_state()
+            st.rerun()
+
+    with col2:
+        if st.button("📦 My Orders", use_container_width=True, type="primary" if st.session_state.page == "orders" else "secondary", key="main_nav_orders"):
+            st.session_state.page = "orders"
+            st.session_state.selected_product_id = None
+            _reset_support_state()
+            st.rerun()
+
+    with col3:
+        if st.button("💬 AI Support", use_container_width=True, type="primary" if st.session_state.page == "support" else "secondary", key="main_nav_support"):
+            st.session_state.page = "support"
+            st.session_state.selected_product_id = None
+            _reset_support_state()
+            _reset_my_orders_state()
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
-# Navigation
+# Navigation (Sidebar Only)
 # ---------------------------------------------------------------------------
 
-nav_shop, nav_orders, nav_support = st.columns(3)
-
-with nav_shop:
-    if st.button(
-        "🛍️ Shop",
-        use_container_width=True,
-        type="primary" if st.session_state.page == "shop" else "secondary",
-    ):
-        st.session_state.page = "shop"
-
-        st.session_state.selected_product_id = None
-
-        _reset_support_state()
-        _reset_my_orders_state()
-
+if not st.session_state.custom_sidebar_open:
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {
+            display: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div id="expand-button-hook"></div>', unsafe_allow_html=True)
+    if st.button("»", key="btn_expand_sidebar"):
+        st.session_state.custom_sidebar_open = True
         st.rerun()
 
+with st.sidebar:
+    st.markdown('<div id="collapse-button-hook"></div>', unsafe_allow_html=True)
+    if st.button("«", key="btn_collapse_sidebar"):
+        st.session_state.custom_sidebar_open = False
+        st.rerun()
 
-with nav_orders:
-    if st.button(
-        "📦 My Orders",
-        use_container_width=True,
-        type="primary" if st.session_state.page == "orders" else "secondary",
-    ):
+    st.markdown(
+        """
+        <div style="margin-top: -1.5rem; margin-bottom: 2rem;">
+            <h3 style="color: #172033; font-weight: 800; margin-bottom: 0;">🧠 SupportFlow AI</h3>
+            <p style="color: #5F6680; font-size: 0.9rem; margin-top: 0.2rem;">AI Customer Support<br>Resolution Assistant</p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    
+    if st.button("🛍 Shop", use_container_width=True, type="primary" if st.session_state.page == "shop" else "secondary", key="sb_shop"):
+        st.session_state.page = "shop"
+        st.session_state.selected_product_id = None
+        _reset_support_state()
+        _reset_my_orders_state()
+        st.rerun()
+
+    if st.button("📦 My Orders", use_container_width=True, type="primary" if st.session_state.page == "orders" else "secondary", key="sb_orders"):
         st.session_state.page = "orders"
         st.session_state.selected_product_id = None
-
         _reset_support_state()
-
         st.rerun()
 
-
-with nav_support:
-    if st.button(
-        "💬 AI Support",
-        use_container_width=True,
-        type="primary" if st.session_state.page == "support" else "secondary",
-    ):
+    if st.button("💬 AI Support", use_container_width=True, type="primary" if st.session_state.page == "support" else "secondary", key="sb_support"):
         st.session_state.page = "support"
         st.session_state.selected_product_id = None
-
         _reset_support_state()
         _reset_my_orders_state()
-
         st.rerun()
-
 
 st.markdown("---")
 
@@ -525,11 +868,12 @@ if st.session_state.page == "shop":
 
     else:
 
-        st.markdown("## 🛍️ Product Catalog")
-
-        st.caption(
-            "Explore products and get AI-powered support when you need it."
-        )
+        with st.container(border=True):
+            st.markdown('<div id="shop-header-hook"></div>', unsafe_allow_html=True)
+            st.markdown("## 🛍️ Product Catalog")
+            st.caption(
+                "Explore products and get AI-powered support when you need it."
+            )
 
         products = _fetch_products()
 
@@ -545,31 +889,31 @@ if st.session_state.page == "shop":
             # Search + category filter
             # ---------------------------------------------------------------
 
-            search_col, category_col = st.columns([2, 1])
-
-            with search_col:
-
-                search_text = st.text_input(
-                    "🔎 Search products",
-                    placeholder="Search iPhone, laptop, headphones...",
-                    key="product_search",
+            with st.container(border=True):
+                st.markdown('<div id="shop-search-hook"></div>', unsafe_allow_html=True)
+                search_col, category_col = st.columns([2, 1])
+                
+                with search_col:
+                    search_text = st.text_input(
+                        "🔎 Search products",
+                        placeholder="Search iPhone, laptop, headphones...",
+                        key="product_search",
+                    )
+                
+                categories = sorted(
+                    {
+                        product.category
+                        for product in products
+                        if product.category
+                    }
                 )
-
-            categories = sorted(
-                {
-                    product.category
-                    for product in products
-                    if product.category
-                }
-            )
-
-            with category_col:
-
-                selected_category = st.selectbox(
-                    "📂 Category",
-                    ["All Categories"] + categories,
-                    key="product_category",
-                )
+                
+                with category_col:
+                    selected_category = st.selectbox(
+                        "📂 Category",
+                        ["All Categories"] + categories,
+                        key="product_category",
+                    )
 
             # ---------------------------------------------------------------
             # Filtering
@@ -640,40 +984,42 @@ if st.session_state.page == "shop":
 
 elif st.session_state.page == "orders":
 
-    st.markdown("## 📦 My Orders")
-
-    st.caption(
-        "Enter your registered email to view your orders."
-    )
-
-    # -----------------------------------------------------------------------
-    # Email input
-    # -----------------------------------------------------------------------
-
-    email_col, button_col = st.columns([3, 1])
-
-    with email_col:
-
-        order_email = st.text_input(
-            "Registered Email",
-            placeholder="Enter your registered email",
-            value=st.session_state.get(
-                "my_orders_email",
-                "",
-            ),
-            key="my_orders_email_input",
+    with st.container(border=True):
+        st.markdown('<div id="my-orders-hook"></div>', unsafe_allow_html=True)
+        st.markdown("## 📦 My Orders")
+        
+        st.caption(
+            "Enter your registered email to view your orders."
         )
-
-    with button_col:
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        view_orders_clicked = st.button(
-            "🔎 View My Orders",
-            type="primary",
-            use_container_width=True,
-            key="view_my_orders",
-        )
+        
+        # -----------------------------------------------------------------------
+        # Email input
+        # -----------------------------------------------------------------------
+        
+        email_col, button_col = st.columns([3, 1])
+        
+        with email_col:
+        
+            order_email = st.text_input(
+                "Registered Email",
+                placeholder="Enter your registered email",
+                value=st.session_state.get(
+                    "my_orders_email",
+                    "",
+                ),
+                key="my_orders_email_input",
+            )
+        
+        with button_col:
+        
+            st.markdown("<br>", unsafe_allow_html=True)
+        
+            view_orders_clicked = st.button(
+                "🔎 View My Orders",
+                type="primary",
+                use_container_width=True,
+                key="view_my_orders",
+            )
 
     # -----------------------------------------------------------------------
     # Fetch orders
@@ -794,11 +1140,18 @@ elif st.session_state.page == "orders":
 
 elif st.session_state.page == "support":
 
-    st.markdown("## 🎧 How can we help you?")
-
-    st.caption(
-        "Describe your issue and SupportFlow AI will help resolve it."
-    )
+    with st.container(border=True):
+        st.markdown('<div id="ai-support-hook"></div>', unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <h2 style="font-weight: 700; margin-bottom: 0;"><span style="background: #E9D5FF; padding: 4px; border-radius: 8px;">🤖</span> AI Support Assistant</h2>
+                <h4 style="color: #475569; margin-top: 0.5rem;">"How can we help you today?"</h4>
+                <p style="color: #64748b; font-size: 0.95rem; margin-top: 0.5rem;">Describe your issue and SupportFlow AI will find the right resolution.</p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
     # -----------------------------------------------------------------------
     # Consume pending input
@@ -825,6 +1178,7 @@ elif st.session_state.page == "support":
     # Demo scenarios
     # -----------------------------------------------------------------------
 
+    st.markdown('<div id="ai-quick-actions-hook"></div>', unsafe_allow_html=True)
     selected_demo = render_examples()
 
     if selected_demo:
@@ -841,39 +1195,41 @@ elif st.session_state.page == "support":
     # Support input
     # -----------------------------------------------------------------------
 
-    user_message: str = st.text_area(
-        label="Describe your issue",
-        label_visibility="collapsed",
-        value=default_value,
-        height=150,
-        placeholder=(
-            "My payment was successful but my iPhone 15 "
-            "order is still pending."
-        ),
-    )
-
-    # -----------------------------------------------------------------------
-    # Buttons
-    # -----------------------------------------------------------------------
-
-    col_resolve, col_clear = st.columns([3, 1])
-
-    with col_resolve:
-
-        resolve_clicked = st.button(
-            "🔎 Resolve Issue",
-            type="primary",
-            use_container_width=True,
-            key="support_resolve",
+    with st.container(border=True):
+        st.markdown('<div id="ai-input-hook"></div>', unsafe_allow_html=True)
+        user_message: str = st.text_area(
+            label="Describe your issue",
+            label_visibility="collapsed",
+            value=default_value,
+            height=150,
+            placeholder=(
+                "My payment was successful but my iPhone 15 "
+                "order is still pending."
+            ),
         )
-
-    with col_clear:
-
-        clear_clicked = st.button(
-            "Clear",
-            use_container_width=True,
-            key="support_clear",
-        )
+    
+        # -----------------------------------------------------------------------
+        # Buttons
+        # -----------------------------------------------------------------------
+    
+        col_resolve, col_clear = st.columns([3, 1])
+    
+        with col_resolve:
+    
+            resolve_clicked = st.button(
+                "🔎 Resolve Issue",
+                type="primary",
+                use_container_width=True,
+                key="support_resolve",
+            )
+    
+        with col_clear:
+    
+            clear_clicked = st.button(
+                "Clear",
+                use_container_width=True,
+                key="support_clear",
+            )
 
     if clear_clicked:
 
@@ -902,7 +1258,7 @@ elif st.session_state.page == "support":
             _reset_fmo_state()
 
             with st.spinner(
-                "Resolving your issue…"
+                "🤖 SupportFlow AI is analyzing your request...\n\n✓ Understanding your request\n✓ Checking relevant information\n✓ Preparing the best resolution"
             ):
 
                 try:

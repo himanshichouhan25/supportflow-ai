@@ -33,6 +33,7 @@ class Product(Base):
 
     # ------------------------------------------------------------------ relationships
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="product")
+    replacements: Mapped[list["Replacement"]] = relationship("Replacement", back_populates="product")
 
     def __repr__(self) -> str:
         return f"<Product id={self.id} product_id={self.product_id!r} name={self.name!r}>"

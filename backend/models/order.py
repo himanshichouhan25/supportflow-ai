@@ -47,6 +47,9 @@ class Order(Base):
     product: Mapped["Product"] = relationship("Product", back_populates="orders")
     payment: Mapped["Payment"] = relationship("Payment", back_populates="order", uselist=False)
     delivery: Mapped["Delivery"] = relationship("Delivery", back_populates="order", uselist=False)
+    refunds: Mapped[list["Refund"]] = relationship("Refund", back_populates="order")
+    returns: Mapped[list["Return"]] = relationship("Return", back_populates="order")
+    replacements: Mapped[list["Replacement"]] = relationship("Replacement", back_populates="order")
 
     def __repr__(self) -> str:
         return f"<Order id={self.id} order_id={self.order_id!r} status={self.order_status!r}>"

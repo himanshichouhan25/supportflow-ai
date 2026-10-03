@@ -9,12 +9,14 @@ check_refund_eligibility(order_id)  → determine refund eligibility via rules
 No LLM calls; purely deterministic business logic.
 """
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.models.order import Order
 from backend.models.payment import Payment
+from backend.models.refund import Refund
 
 
 # ---------------------------------------------------------------------------
@@ -154,3 +156,151 @@ def check_refund_eligibility(order_id: str, db: Session) -> dict[str, Any]:
         "amount": amount,
         "reason": f"Order is currently {order_status}. Refund is only applicable to cancelled orders.",
     }
+
+
+def process_refund(order_id: str, db: Session, reason: str = "Customer requested refund") -> dict[str, Any]:
+    """
+    Process a simulated refund for an order.
+
+    Steps:
+    1. Check order/payment existence.
+    2. Check eligibility (must be eligible).
+    3. Duplicate safety: check if completed Refund already exists.
+    4. Create Refund record (status=COMPLETED).
+    5. Update Payment.payment_status = 'REFUNDED'.
+    6. Commit safely and return structured result.
+    """
+    if not order_id:
+        return {"success": False, "message": "Order ID is required to process a refund."}
+
+    try:
+        # Check eligibility first
+        eligibility = check_refund_eligibility(order_id, db)
+        if not eligibility.get("success"):
+            return eligibility
+
+        # If payment is already REFUNDED or not eligible
+        if not eligibility.get("eligible"):
+            # Check if a completed refund record already exists for duplicate safety reporting
+            existing_refund = db.query(Refund).filter_by(order_id=order_id, status="COMPLETED").first()
+            if existing_refund:
+                return {
+                    "success": True,
+                    "processed": False,
+                    "already_refunded": True,
+                    "refund_id": existing_refund.refund_id,
+                    "order_id": order_id,
+                    "payment_id": existing_refund.payment_id,
+                    "amount": str(existing_refund.amount),
+                    "status": existing_refund.status,
+                    "reason": existing_refund.reason,
+                    "created_at": existing_refund.created_at.isoformat() if existing_refund.created_at else None,
+                    "processed_at": existing_refund.processed_at.isoformat() if existing_refund.processed_at else None,
+                    "message": f"Refund for order '{order_id}' has already been processed.",
+                }
+            return {
+                "success": False,
+                "processed": False,
+                "order_id": order_id,
+                "message": eligibility.get("reason", "Order is not eligible for a refund."),
+            }
+
+        order: Order | None = db.query(Order).filter_by(order_id=order_id).first()
+        payment: Payment | None = db.query(Payment).filter_by(order_id=order_id).first()
+
+        if not order or not payment:
+            return {"success": False, "message": f"Order or payment record for '{order_id}' not found."}
+
+        # Check duplicate refund record in DB before creating
+        existing = db.query(Refund).filter_by(order_id=order_id, status="COMPLETED").first()
+        if existing:
+            return {
+                "success": True,
+                "processed": False,
+                "already_refunded": True,
+                "refund_id": existing.refund_id,
+                "order_id": order_id,
+                "payment_id": existing.payment_id,
+                "amount": str(existing.amount),
+                "status": existing.status,
+                "reason": existing.reason,
+                "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                "processed_at": existing.processed_at.isoformat() if existing.processed_at else None,
+                "message": f"Refund for order '{order_id}' has already been processed.",
+            }
+
+        # Generate unique refund ID (e.g. RFD1001 or RFD_<order_id>)
+        last_refund = db.query(Refund).order_by(Refund.id.desc()).first()
+        next_num = (last_refund.id + 1) if last_refund else 1
+        refund_id = f"RFD{next_num:04d}"
+
+        now = datetime.now(timezone.utc)
+
+        # Create Refund record
+        refund_record = Refund(
+            refund_id=refund_id,
+            payment_id=payment.payment_id,
+            order_id=order.order_id,
+            amount=payment.amount,
+            status="COMPLETED",
+            reason=reason,
+            created_at=now,
+            processed_at=now,
+        )
+
+        # Update Payment status
+        payment.payment_status = "REFUNDED"
+
+        db.add(refund_record)
+        db.commit()
+        db.refresh(refund_record)
+        db.refresh(payment)
+
+        return {
+            "success": True,
+            "processed": True,
+            "already_refunded": False,
+            "refund_id": refund_record.refund_id,
+            "order_id": order.order_id,
+            "payment_id": payment.payment_id,
+            "amount": str(refund_record.amount),
+            "status": refund_record.status,
+            "reason": refund_record.reason,
+            "created_at": refund_record.created_at.isoformat() if refund_record.created_at else None,
+            "processed_at": refund_record.processed_at.isoformat() if refund_record.processed_at else None,
+            "message": f"Refund of INR {refund_record.amount} for order '{order_id}' processed successfully.",
+        }
+
+    except Exception as exc:
+        db.rollback()
+        return {"success": False, "message": f"Database error during refund processing: {exc}"}
+
+
+def verify_refund(order_id: str, db: Session) -> dict[str, Any]:
+    """
+    Query the Refund table and return the actual current refund state from PostgreSQL.
+    """
+    if not order_id:
+        return {"success": False, "message": "Order ID is required to verify refund."}
+
+    refund: Refund | None = db.query(Refund).filter_by(order_id=order_id).order_by(Refund.id.desc()).first()
+
+    if not refund:
+        return {
+            "success": False,
+            "order_id": order_id,
+            "message": f"No refund record found for order '{order_id}'.",
+        }
+
+    return {
+        "success": True,
+        "refund_id": refund.refund_id,
+        "order_id": refund.order_id,
+        "payment_id": refund.payment_id,
+        "amount": str(refund.amount),
+        "status": refund.status,
+        "reason": refund.reason,
+        "created_at": refund.created_at.isoformat() if refund.created_at else None,
+        "processed_at": refund.processed_at.isoformat() if refund.processed_at else None,
+    }
+

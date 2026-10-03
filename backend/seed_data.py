@@ -27,6 +27,9 @@ from backend.models.delivery import Delivery
 from backend.models.order import Order
 from backend.models.payment import Payment
 from backend.models.product import Product
+from backend.models.refund import Refund
+from backend.models.return_request import Return
+from backend.models.replacement import Replacement
 from backend.database import SessionLocal
 
 
@@ -448,6 +451,45 @@ DELIVERIES = [
 # Seeding logic
 # ---------------------------------------------------------------------------
 
+REFUNDS = [
+    {
+        "refund_id": "RFD001",
+        "payment_id": "PAY007",
+        "order_id": "ORD007",
+        "amount": "6499.00",
+        "status": "COMPLETED",
+        "reason": "Order cancelled by customer",
+        "created_at": _utc(2024, 6, 18, 14, 0),
+        "processed_at": _utc(2024, 6, 18, 14, 30),
+    },
+]
+
+RETURNS = [
+    {
+        "return_id": "RET001",
+        "order_id": "ORD002",
+        "customer_id": "C102",
+        "reason": "Slight color mismatch",
+        "status": "REQUESTED",
+        "created_at": _utc(2024, 6, 11, 10, 0),
+        "updated_at": _utc(2024, 6, 11, 10, 0),
+    },
+]
+
+REPLACEMENTS = [
+    {
+        "replacement_id": "RPL001",
+        "order_id": "ORD004",
+        "customer_id": "C104",
+        "product_id": "P005",
+        "reason": "Damaged outer packaging",
+        "status": "APPROVED",
+        "created_at": _utc(2024, 6, 11, 15, 0),
+        "updated_at": _utc(2024, 6, 12, 9, 0),
+    },
+]
+
+
 def _seed_customers(db: Session) -> int:
     inserted = 0
     for data in CUSTOMERS:
@@ -503,6 +545,39 @@ def _seed_deliveries(db: Session) -> int:
     return inserted
 
 
+def _seed_refunds(db: Session) -> int:
+    inserted = 0
+    for data in REFUNDS:
+        exists = db.query(Refund).filter_by(refund_id=data["refund_id"]).first()
+        if not exists:
+            db.add(Refund(**data))
+            inserted += 1
+    db.commit()
+    return inserted
+
+
+def _seed_returns(db: Session) -> int:
+    inserted = 0
+    for data in RETURNS:
+        exists = db.query(Return).filter_by(return_id=data["return_id"]).first()
+        if not exists:
+            db.add(Return(**data))
+            inserted += 1
+    db.commit()
+    return inserted
+
+
+def _seed_replacements(db: Session) -> int:
+    inserted = 0
+    for data in REPLACEMENTS:
+        exists = db.query(Replacement).filter_by(replacement_id=data["replacement_id"]).first()
+        if not exists:
+            db.add(Replacement(**data))
+            inserted += 1
+    db.commit()
+    return inserted
+
+
 # ---------------------------------------------------------------------------
 # Verification helpers
 # ---------------------------------------------------------------------------
@@ -512,11 +587,14 @@ def _verify(db: Session) -> None:
 
     # Row counts
     for model, label in [
-        (Customer, "customers"),
-        (Product,  "products"),
-        (Order,    "orders"),
-        (Payment,  "payments"),
-        (Delivery, "deliveries"),
+        (Customer,    "customers"),
+        (Product,     "products"),
+        (Order,       "orders"),
+        (Payment,     "payments"),
+        (Delivery,    "deliveries"),
+        (Refund,      "refunds"),
+        (Return,      "returns"),
+        (Replacement, "replacements"),
     ]:
         count = db.query(model).count()
         print(f"  {label:<12}: {count} row(s)")
@@ -550,29 +628,42 @@ def _verify(db: Session) -> None:
     print(f"  Scenario E (FAILED payment): {'[PASS]' if e_ok else '[FAIL]'}")
 
 
+from backend.database import Base, engine, SessionLocal
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def seed() -> None:
+    Base.metadata.create_all(bind=engine)
     db: Session = SessionLocal()
     try:
         print("Seeding ShopKart demo data...\n")
 
         c = _seed_customers(db)
-        print(f"  Customers  inserted: {c}")
+        print(f"  Customers    inserted: {c}")
 
         p = _seed_products(db)
-        print(f"  Products   inserted: {p}")
+        print(f"  Products     inserted: {p}")
 
         o = _seed_orders(db)
-        print(f"  Orders     inserted: {o}")
+        print(f"  Orders       inserted: {o}")
 
         pay = _seed_payments(db)
-        print(f"  Payments   inserted: {pay}")
+        print(f"  Payments     inserted: {pay}")
 
         d = _seed_deliveries(db)
-        print(f"  Deliveries inserted: {d}")
+        print(f"  Deliveries   inserted: {d}")
+
+        rfd = _seed_refunds(db)
+        print(f"  Refunds      inserted: {rfd}")
+
+        ret = _seed_returns(db)
+        print(f"  Returns      inserted: {ret}")
+
+        rpl = _seed_replacements(db)
+        print(f"  Replacements inserted: {rpl}")
 
         _verify(db)
 

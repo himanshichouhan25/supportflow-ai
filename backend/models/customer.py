@@ -30,6 +30,8 @@ class Customer(Base):
 
     # ------------------------------------------------------------------ relationships
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="customer")
+    returns: Mapped[list["Return"]] = relationship("Return", back_populates="customer")
+    replacements: Mapped[list["Replacement"]] = relationship("Replacement", back_populates="customer")
 
     def __repr__(self) -> str:
         return f"<Customer id={self.id} customer_id={self.customer_id!r} email={self.email!r}>"

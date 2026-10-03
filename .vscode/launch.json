@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Backend (FastAPI)",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "backend.main:app",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Run Frontend (Streamlit)",
+            "type": "python",
+            "request": "launch",
+            "module": "streamlit",
+            "args": [
+                "run",
+                "frontend/app.py"
+            ],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Run Full Application (Backend + Frontend)",
+            "configurations": [
+                "Run Backend (FastAPI)",
+                "Run Frontend (Streamlit)"
+            ]
+        }
+    ]
+}

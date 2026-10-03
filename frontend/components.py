@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 frontend/components.py -- Customer-facing UI components for SupportFlow AI.
 
@@ -22,39 +22,7 @@ import re
 import streamlit as st
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
 
-def render_sidebar() -> None:
-    with st.sidebar:
-        st.markdown("## 🧠 SupportFlow AI")
-        st.markdown("**AI Customer Support Resolution Assistant**")
-        st.caption("Describe your issue and get a support resolution.")
-        st.markdown("---")
-
-        st.markdown("#### Demo Scenarios")
-        st.markdown(
-            "- Payment & Order\n"
-            "- Cancellation & Refund\n"
-            "- Delivery Tracking"
-        )
-
-        st.markdown("---")
-
-        st.markdown("#### Find My Order")
-        st.markdown(
-            "Don't know your order ID?  \n"
-            "Enter your registered email and select your order."
-        )
-
-        st.markdown("---")
-
-        st.caption(
-            "Powered by\n"
-            "FastAPI · PostgreSQL · Python · Gemini AI\n\n"
-            "_Demo data only. Not affiliated with any real retailer._"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +432,18 @@ def render_find_my_order(
         order_date = order.get("order_date", "")
 
         emoji = _product_emoji(product_name)
-        badge = _STATUS_BADGE.get(status, status)
+        def get_html_badge(status):
+            s = status.upper()
+            if s in ['SUCCESS', 'RESOLVED']: return f"<span style='background:#DCFCE7; color:#166534; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['DELIVERED']: return f"<span style='background:#EAF8EF; color:#166534; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['PENDING', 'DELAYED']: return f"<span style='background:#FFF7D6; color:#92400E; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['FAILED']: return f"<span style='background:#FEECEC; color:#B91C1C; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['CANCELLED', 'REFUNDED']: return f"<span style='background:#F1F5F9; color:#475569; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['SHIPPED', 'OUT_FOR_DELIVERY', 'CONFIRMED']: return f"<span style='background:#E8F1FF; color:#1D4ED8; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            if s in ['OPEN']: return f"<span style='background:#EDE9FE; color:#6B21A8; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+            return f"<span style='background:#E8F1FF; color:#1D4ED8; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.75rem; font-weight:600;'>{status}</span>"
+
+        badge_html = get_html_badge(status)
         amount_str = _fmt_inr(amount)
 
         date_str = (
@@ -483,7 +462,8 @@ def render_find_my_order(
                 )
 
                 st.markdown(
-                    f"Status: {badge}"
+                    f"<div style='margin: 4px 0;'>{badge_html}</div>",
+                    unsafe_allow_html=True
                 )
 
                 st.markdown(
@@ -514,37 +494,93 @@ def render_find_my_order(
 # Product Catalog
 # ---------------------------------------------------------------------------
 
+import os
+import base64
+
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "products")
+
+_PRODUCT_IMAGES = {
+    "Apple iPhone 15": "iphone15.jpg",
+    "Samsung Galaxy S24": "samsung-s24.jpg",
+    "ASUS Vivobook 15 Laptop": "asus-vivobook15.jpg",
+    "boAt Airdopes 141 Earbuds": "boat-airdopes141.jpg",
+    "Sony WH-1000XM5 Headphones": "sony-wh1000xm5.jpg",
+    "Logitech MX Master 3 Mouse": "logitech-mx-master3.png",
+    "Nike Air Max 270": "nike-air-max270.jpg",
+    "Philips HD9200 Air Fryer": "philips-hd9200.jpg",
+    "Python Crash Course (3rd Edition)": "python-crash-course.jpg",
+    "Syska LED Smart Bulb 9W": "syska-led-bulb-9w.jpg"
+}
+
+def _get_image_data_uri(product_name: str) -> str:
+    filename = _PRODUCT_IMAGES.get(product_name)
+    if not filename:
+        return ""
+    
+    filepath = os.path.join(_ASSETS_DIR, filename)
+    if not os.path.exists(filepath):
+        return ""
+        
+    try:
+        with open(filepath, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        ext = filename.split('.')[-1].lower()
+        if ext == 'jpg': ext = 'jpeg'
+        return f"data:image/{ext};base64,{b64}"
+    except Exception:
+        return ""
+
+def _get_category_color(category: str) -> str:
+    cat = category.lower() if category else ""
+    if "smartphone" in cat or "phone" in cat: return "#E8F1FF"
+    if "laptop" in cat or "computer" in cat: return "#F3E8FF"
+    if "audio" in cat or "headphone" in cat: return "#F0E9FF"
+    if "accessor" in cat: return "#E8F8F1"
+    if "footwear" in cat or "shoe" in cat: return "#FFEFE5"
+    if "kitchen" in cat or "appliance" in cat: return "#FFF9E5"
+    if "book" in cat: return "#FCEFF5"
+    return "#F8F9FA"
+
 def render_product_card(product) -> bool:
     """
     Render a customer-facing product card.
-
-    The product object is expected to come from the existing
-    PostgreSQL Product SQLAlchemy model.
-
-    Returns:
-        True  -> customer clicked View Product
-        False -> no selection
     """
-
     with st.container(border=True):
-
+        image_url = _get_image_data_uri(product.name)
+        bg_color = _get_category_color(product.category)
+        
+        # Product Image area
+        if image_url:
+            st.markdown(
+                f'''
+                <div style="background-color: {bg_color}; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center; display: flex; align-items: center; justify-content: center; height: 180px;">
+                    <img src="{image_url}" alt="{product.name}" style="max-height: 100%; max-width: 100%; object-fit: contain; border-radius: 8px;" onerror="this.onerror=null; this.parentElement.innerHTML='<div style=\\'display:flex; flex-direction:column; align-items:center;\\'><div style=\\'font-size: 2.5rem;\\'>📦</div><div style=\\'color: #64748B; font-size: 0.85rem; margin-top: 0.5rem;\\'>Product image unavailable</div></div>';">
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f'''
+                <div style="background-color: {bg_color}; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 180px;">
+                    <div style="font-size: 2.5rem;">📦</div>
+                    <div style="color: #64748B; font-size: 0.85rem; margin-top: 0.5rem;">Product image unavailable</div>
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
+        
         emoji = _product_emoji(product.name)
-
-        st.markdown(
-            f"### {emoji} {product.name}"
-        )
-
+        st.markdown(f"#### {emoji} {product.name}", unsafe_allow_html=True)
         if product.category:
-            st.caption(product.category)
-
-        st.markdown(
-            f"### ₹{product.price:,.2f}"
-        )
+            st.markdown(f"<p style='color: #64748b; font-size: 0.85rem; margin-top: -10px;'>{product.category}</p>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='color: #172033; margin-top: 10px; margin-bottom: 20px;'>₹{product.price:,.2f}</h3>", unsafe_allow_html=True)
 
         return st.button(
-            "View Product",
+            "View Details",
             key=f"view_product_{product.product_id}",
             use_container_width=True,
+            type="primary"
         )
 
 
@@ -558,25 +594,51 @@ def render_resolution(
     hide_clarification: bool = False,
 ) -> None:
     """
-    Display the customer-facing resolution.
-
-    No agent names, tool names, workflow steps,
-    or internal data are shown.
+    Display the customer-facing resolution in a premium card.
     """
-
-    st.markdown("### 🎯 Resolution")
 
     if hide_clarification:
         return
 
-    if resolved:
-        st.success("✅ Resolved")
-
-    else:
-        st.warning(
-            "⚠️ Unable to fully resolve — "
-            "please contact support for further assistance."
-        )
+    st.markdown("### 🎯 Resolution")
 
     with st.container(border=True):
+        st.markdown('<div id="resolution-hook"></div>', unsafe_allow_html=True)
+        if resolved:
+            st.markdown(
+                """
+                <div style='display: flex; align-items: center; margin-bottom: 1rem;'>
+                    <span style='background: #ECFDF3; color: #166534; padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;'>
+                        ✓ Resolved
+                    </span>
+                </div>
+                """, unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                """
+                <div style='display: flex; align-items: center; margin-bottom: 1rem;'>
+                    <span style='background: #FFF7D6; color: #92400E; padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;'>
+                        ⚠️ Unable to fully resolve
+                    </span>
+                </div>
+                """, unsafe_allow_html=True
+            )
+
         st.markdown(final_response)
+
+        # Extract and format ticket information if present
+        import re
+        ticket_match = re.search(r'(TKT-\d+)', final_response)
+        if ticket_match:
+            ticket_id = ticket_match.group(1)
+            st.markdown(
+                f"""
+                <div class="ticket-box" style="background: #F5EEFF; border: 1px solid #DCC7F5; padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+                    <h4 style="margin: 0 0 8px 0; color: #6B21A8;">🎫 Support Ticket Created</h4>
+                    <p style="margin: 0; font-size: 0.95rem;"><strong>Ticket ID:</strong> <span style="color: #6B21A8;">{ticket_id}</span></p>
+                    <p style="margin: 4px 0 8px 0; font-size: 0.95rem;"><strong>Status:</strong> <span style='background: #EDE9FE; color: #6B21A8; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;'>OPEN</span></p>
+                    <p style="margin: 0; color: #6B21A8; opacity: 0.8; font-size: 0.9rem;">Our support team will review your request shortly.</p>
+                </div>
+                """, unsafe_allow_html=True
+            )

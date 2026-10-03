@@ -41,6 +41,7 @@ class Payment(Base):
 
     # ------------------------------------------------------------------ relationships
     order: Mapped["Order"] = relationship("Order", back_populates="payment")
+    refunds: Mapped[list["Refund"]] = relationship("Refund", back_populates="payment")
 
     def __repr__(self) -> str:
         return f"<Payment id={self.id} payment_id={self.payment_id!r} status={self.payment_status!r}>"

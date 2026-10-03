@@ -16,6 +16,9 @@ from backend.models.order import Order
 from backend.models.payment import Payment
 from backend.models.delivery import Delivery
 from backend.models.support_ticket import SupportTicket
+from backend.models.refund import Refund
+from backend.models.return_request import Return
+from backend.models.replacement import Replacement
 
 __all__ = [
     "Customer",
@@ -24,4 +27,7 @@ __all__ = [
     "Payment",
     "Delivery",
     "SupportTicket",
+    "Refund",
+    "Return",
+    "Replacement",
 ]

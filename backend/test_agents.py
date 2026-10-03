@@ -211,5 +211,9 @@ def run_tests() -> None:
         db.close()
 
 
+def test_agents_suite():
+    run_tests()
+
+
 if __name__ == "__main__":
     run_tests()

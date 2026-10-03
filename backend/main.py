@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session
 import backend.models  # noqa: F401 — side-effect import registers all tables
 
 from backend.database import Base, engine, get_db
+from backend.routers.refund import router as refund_router
+from backend.routers.replacement import router as replacement_router
+from backend.routers.return_request import router as return_router
 
 # ---------------------------------------------------------------------------
 # Application
@@ -27,6 +30,11 @@ app = FastAPI(
     description="Backend API for the AI Customer Support Resolution Agent hackathon project.",
     version="0.1.0",
 )
+
+# Register support resolution routers
+app.include_router(refund_router)
+app.include_router(return_router)
+app.include_router(replacement_router)
 
 # ---------------------------------------------------------------------------
 # Startup — create tables if they don't already exist

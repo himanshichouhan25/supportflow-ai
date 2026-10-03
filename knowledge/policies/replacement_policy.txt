@@ -1,0 +1,22 @@
+# REPLACEMENT POLICY
+
+## 1. Replacement Eligibility Rules
+- Product replacements are available strictly for orders with status DELIVERED.
+- Orders in PENDING, CONFIRMED, or CANCELLED status are not eligible for replacement.
+- The item must have a verified defect, damage during transit, or incorrect item delivery.
+
+## 2. Duplicate Replacement Protection
+- Only one active replacement request (REP number) is allowed per order.
+- Orders with an active replacement status (REQUESTED, APPROVED, PROCESSING, SHIPPED, DELIVERED) cannot submit a duplicate replacement request.
+- CANCELLED replacement requests may be resubmitted if valid.
+
+## 3. Product & Account Validation
+- The requested replacement product_id must match the original product ordered.
+- Ownership verification ensures the requesting customer_id matches the order record.
+
+## 4. Replacement Request Status
+- Created replacement requests are initialized with status REQUESTED and a unique REP identifier.
+- Once approved, replacement items are processed and dispatched with tracking details.
+
+## 5. Escalation Conditions
+- Out-of-stock replacement items, disputed defect claims, or requests for non-delivered orders trigger support ticket escalation.

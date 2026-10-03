@@ -1,0 +1,17 @@
+# DELIVERY POLICY
+
+## 1. Delivery Status Meanings
+- PENDING / CONFIRMED: Order is being prepared for shipment at the warehouse.
+- SHIPPED / IN_TRANSIT: Order has been dispatched with a logistics carrier.
+- DELIVERED: Order has been successfully handed over to the customer address.
+- DELAYED: Order shipment is experiencing unexpected carrier delay.
+
+## 2. Tracking & Status Inquiries
+- Customers can query tracking information, estimated delivery dates, and carrier details using their valid order ID.
+- Tracking status is updated deterministically from carrier partner feeds.
+
+## 3. Delayed Delivery Handling
+- Deliveries marked DELAYED for more than 5 business days past estimated date are prioritized for carrier investigation.
+
+## 4. Escalation Conditions
+- Lost packages, un-updated tracking for 7+ days, incorrect delivery address updates, or marked delivered without receiving package require support ticket escalation.

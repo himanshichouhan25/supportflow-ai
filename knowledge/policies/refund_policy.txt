@@ -1,0 +1,22 @@
+# REFUND POLICY
+
+## 1. Refund Eligibility Rules
+- A customer is eligible for a full refund if the order has been CANCELLED and the payment status is SUCCESS.
+- Delivered items are not eligible for a direct monetary refund under standard cancellation policy; delivered items must be processed via the return policy.
+- Pending or active (CONFIRMED) orders cannot be refunded directly until the order is cancelled first.
+
+## 2. Payment & Charge Rules
+- If payment status is FAILED, no charge was incurred by the customer, and no refund is required or processed.
+- If payment status is PENDING, the payment transaction must settle or fail before a refund can be evaluated.
+
+## 3. Duplicate Refund Prevention
+- Every refund operation checks the database for existing completed refund records (RFD numbers).
+- If a refund record has already been marked COMPLETED for the order, duplicate refund processing is strictly prevented.
+
+## 4. Refund Processing & Status
+- Approved refunds are created with status COMPLETED and immediately update the underlying payment record status to REFUNDED.
+- Processed refund amounts match the original payment transaction amount.
+
+## 5. Escalation Conditions
+- Orders where payment is marked SUCCESS but no order cancellation is registered require support ticket escalation.
+- System or database errors during refund execution trigger automatic ticket escalation to support agents.

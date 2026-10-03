@@ -1,0 +1,15 @@
+# PAYMENT POLICY
+
+## 1. Supported Payment Methods & Statuses
+- Supported methods include UPI, Credit Card, Debit Card, Net Banking, and Wallet.
+- Status SUCCESS: Transaction confirmed by bank gateway.
+- Status PENDING: Transaction awaiting bank settlement.
+- Status FAILED: Transaction declined; no money debited from account.
+- Status REFUNDED: Money returned to original payment method.
+
+## 2. Payment Mismatch & Debited Failed Payments
+- If payment status is FAILED but money was deducted from customer account, auto-reversal occurs within 3-5 business days.
+- If refund is approved for a SUCCESS payment, refund is issued to original payment source.
+
+## 3. Escalation Conditions
+- Double charging, payment settlement delays exceeding 5 days, or payment status mismatches require support ticket escalation.

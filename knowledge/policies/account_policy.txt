@@ -1,0 +1,12 @@
+# ACCOUNT POLICY
+
+## 1. Account Information & Verification
+- Customer accounts are uniquely identified by a customer ID (e.g. C101).
+- Customer details include registered name, email address, phone number, and primary shipping address.
+
+## 2. Ownership & Security Rules
+- Support operations modifying orders, returns, or refunds require verification that the requesting customer owns the account and order.
+- Security-sensitive actions (email update, phone number change, password reset) require strict customer verification.
+
+## 3. Escalation Conditions
+- Suspected account compromise, unauthorized order placement, or email/phone mismatch issues trigger support ticket escalation.

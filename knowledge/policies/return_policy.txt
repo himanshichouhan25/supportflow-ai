@@ -1,0 +1,22 @@
+# RETURN POLICY
+
+## 1. Return Eligibility Rules
+- Product returns are strictly available ONLY for orders with an order status of DELIVERED.
+- Orders in PENDING, CONFIRMED, or CANCELLED status are not eligible for a product return.
+- The return request must be submitted within the standard 30-day return window following delivery.
+
+## 2. Duplicate Return Protection
+- Only one active return request (RET number) is permitted per order.
+- Orders with an existing active return status (REQUESTED, APPROVED, PICKUP_SCHEDULED, RECEIVED, COMPLETED) cannot submit a duplicate return request.
+
+## 3. Ownership & Customer Verification
+- The customer requesting the return must be verified as the owner (matching customer_id) of the order.
+- Mismatched customer account requests will be rejected.
+
+## 4. Return Request Lifecycle
+- Upon valid creation, a return request is assigned status REQUESTED and a unique RET identifier.
+- Return requests undergo inspection upon pickup before final completion and refund credit issuance.
+
+## 5. Non-Returnable Conditions & Escalation
+- Products damaged by customer misuse, altered items, or missing original tags are non-returnable.
+- Requests submitted past the 30-day window or involving unverified accounts require support ticket escalation.

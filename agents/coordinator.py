@@ -36,6 +36,7 @@ from agents.payment_agent import run as run_payment
 from agents.delivery_agent import run as run_delivery
 from agents.account_agent import run as run_account
 from agents.return_agent import run as run_return
+from agents.replacement_agent import run as run_replacement
 from backend.database import SessionLocal
 from backend.services.support_ticket_service import create_support_ticket
 
@@ -97,8 +98,13 @@ _RETURN_KW = {
     "return",
     "returning",
     "sendback",
-    "damaged",
-    "defective",
+}
+
+_REPLACEMENT_KW = {
+    "replace",
+    "replacement",
+    "exchange",
+    "substitute",
 }
 
 # Product-support phrases used by the customer-facing "Get Support" button.
@@ -124,7 +130,7 @@ def _detect_intents(message: str) -> list[str]:
     ordered by priority.
 
     Priority:
-        return > payment > order > delivery > account
+        replacement > return > payment > order > delivery > account
 
     Returns at least one intent; falls back to 'unknown'.
     """
@@ -132,7 +138,16 @@ def _detect_intents(message: str) -> list[str]:
     lower_tokens = set(re.findall(r"[a-z]+", message.lower()))
     found: list[str] = []
 
-    # Check multi-word phrase for "send back"
+    # Replacement intent check
+    if (
+        lower_tokens & _REPLACEMENT_KW
+        or "send replacement" in message.lower()
+        or "need replacement" in message.lower()
+        or "want replacement" in message.lower()
+    ):
+        found.append("replacement")
+
+    # Return intent check ("send back", "return")
     if lower_tokens & _RETURN_KW or "send back" in message.lower():
         found.append("return")
 
@@ -261,6 +276,7 @@ def _call_specialist(
         "delivery": run_delivery,
         "account": run_account,
         "return": run_return,
+        "replacement": run_replacement,
     }
 
     fn = DISPATCH.get(intent)
@@ -271,8 +287,8 @@ def _call_specialist(
             "message": f"No specialist for intent '{intent}'.",
         }
 
-    # Order/payment/delivery/return require an order ID.
-    _needs_order_id = intent in ("order", "payment", "delivery", "return")
+    # Order/payment/delivery/return/replacement require an order ID.
+    _needs_order_id = intent in ("order", "payment", "delivery", "return", "replacement")
 
     if _needs_order_id and _extract_order_id(message) is None:
         clarification = (
@@ -641,6 +657,36 @@ def _build_return_text(tr: dict[str, Any], action: str) -> str:
     return f"Return request details for order **{oid}**: Return ID **{ret_id}**, Status: **{status}**."
 
 
+def _build_replacement_text(tr: dict[str, Any], action: str) -> str:
+
+    oid = tr.get("order_id", "")
+    rep_id = tr.get("replacement_id", "")
+    status = tr.get("status", "").upper()
+    reason = tr.get("reason", "")
+
+    if action == "create_replacement_request":
+        return (
+            f"Your replacement request for order **{oid}** has been successfully registered.\n\n"
+            f"Replacement ID: **{rep_id}**\n"
+            f"Status: **{status}**"
+        )
+
+    if action == "verify_replacement" or tr.get("already_exists"):
+        return (
+            f"A replacement request for order **{oid}** already exists in our system.\n\n"
+            f"Replacement ID: **{rep_id}**\n"
+            f"Status: **{status}**"
+        )
+
+    if action == "check_replacement_eligibility":
+        eligible = tr.get("eligible")
+        if eligible:
+            return f"Order **{oid}** is eligible for product replacement.\n\n{reason}"
+        return f"Order **{oid}** is not eligible for replacement.\n\n{reason}"
+
+    return f"Replacement request details for order **{oid}**: Replacement ID **{rep_id}**, Status: **{status}**."
+
+
 # ---------------------------------------------------------------------------
 # Final response builder
 # ---------------------------------------------------------------------------
@@ -696,6 +742,11 @@ def _build_response(
             elif "Return" in agent:
                 fact_lines.append(
                     _build_return_text(tr, action)
+                )
+
+            elif "Replacement" in agent:
+                fact_lines.append(
+                    _build_replacement_text(tr, action)
                 )
 
         facts = "\n\n".join(fact_lines)
@@ -782,6 +833,11 @@ def _build_response(
         elif "ReturnAgent" in agent:
             parts.append(
                 _build_return_text(tr, action)
+            )
+
+        elif "ReplacementAgent" in agent:
+            parts.append(
+                _build_replacement_text(tr, action)
             )
 
     # Remove consecutive duplicate messages.

@@ -31,6 +31,9 @@ from agents.state import (
     ConversationContext,
     SessionManager,
     OrchestrationStatus,
+    StepStatus,
+    WorkflowStep,
+    WorkflowPlan,
 )
 
 from backend.database import SessionLocal
@@ -435,206 +438,395 @@ class Orchestrator:
 
 
     def _create_plan(self, state: AgentState) -> None:
-        """Generate structured action plan based on state intent(s)."""
-        plan: list[ActionItem] = []
+        """Generate structured multi-step WorkflowPlan and action items based on state intent(s)."""
+        wf_steps: list[WorkflowStep] = []
 
+        # Step 1: Policy Retrieval
+        step_1 = WorkflowStep(
+            step_id="step_1",
+            action="policy_retrieval",
+            agent="orchestrator",
+            description="Retrieve domain support policy context",
+            depends_on=[],
+        )
+        wf_steps.append(step_1)
+
+        # Step 2: Order Check
+        step_2 = WorkflowStep(
+            step_id="step_2",
+            action="check_order",
+            agent="order",
+            description="Verify order status and details in PostgreSQL",
+            depends_on=["step_1"],
+        )
+        wf_steps.append(step_2)
+
+        msg_lower = state.user_request.lower()
         primary = state.intent
-        if "refund" in state.user_request.lower():
+        if "refund" in msg_lower:
             primary = "refund"
 
-        if primary in ("refund", "return", "replacement"):
-            intents_to_plan = [primary]
-        else:
-            intents_to_plan = state.intents if state.intents else ([primary] if primary else [])
+        step_idx = 3
 
-
-        for intent in intents_to_plan:
-            if intent == "refund":
-                plan.extend([
-                    ActionItem(agent="payment", action="check_refund_eligibility", description="Check refund eligibility"),
-                    ActionItem(agent="payment", action="process_refund", description="Process refund in DB"),
-                    ActionItem(agent="payment", action="verify_refund", description="Verify refund state in PostgreSQL"),
-                ])
-            elif intent == "return":
-                plan.extend([
-                    ActionItem(agent="return", action="check_return_eligibility", description="Check return eligibility"),
-                    ActionItem(agent="return", action="create_return_request", description="Create return request in DB"),
-                    ActionItem(agent="return", action="verify_return", description="Verify return record in PostgreSQL"),
-                ])
-            elif intent == "replacement":
-                plan.extend([
-                    ActionItem(agent="replacement", action="check_replacement_eligibility", description="Check replacement eligibility"),
-                    ActionItem(agent="replacement", action="create_replacement_request", description="Create replacement request in DB"),
-                    ActionItem(agent="replacement", action="verify_replacement", description="Verify replacement record in PostgreSQL"),
-                ])
-            elif intent in ("order", "payment", "delivery", "account"):
-                plan.append(
-                    ActionItem(agent=intent, action="lookup", description=f"Execute {intent} agent lookup")
-                )
-
-        if not plan:
-            plan.append(
-                ActionItem(agent="unknown", action="general_support", description="Handle general support request")
+        if primary == "refund":
+            step_elig = WorkflowStep(
+                step_id=f"step_{step_idx}",
+                action="check_refund_eligibility",
+                agent="payment",
+                description="Check refund eligibility in PostgreSQL",
+                depends_on=["step_2"],
             )
+            wf_steps.append(step_elig)
 
-        state.plan = plan
+            step_create = WorkflowStep(
+                step_id=f"step_{step_idx+1}",
+                action="process_refund",
+                agent="payment",
+                description="Process refund in DB",
+                depends_on=[f"step_{step_idx}"],
+                verification_required=True,
+            )
+            wf_steps.append(step_create)
+
+            step_verify = WorkflowStep(
+                step_id=f"step_{step_idx+2}",
+                action="verify_refund",
+                agent="payment",
+                description="Verify refund state in PostgreSQL",
+                depends_on=[f"step_{step_idx+1}"],
+            )
+            wf_steps.append(step_verify)
+
+            if "status" in msg_lower or "refund status" in msg_lower or "tell me" in msg_lower:
+                step_status = WorkflowStep(
+                    step_id=f"step_{step_idx+3}",
+                    action="get_refund_status",
+                    agent="payment",
+                    description="Query refund transaction status",
+                    depends_on=[f"step_{step_idx+2}"],
+                )
+                wf_steps.append(step_status)
+
+        elif primary == "return":
+            step_elig = WorkflowStep(
+                step_id=f"step_{step_idx}",
+                action="check_return_eligibility",
+                agent="return",
+                description="Check return eligibility in PostgreSQL",
+                depends_on=["step_2"],
+            )
+            wf_steps.append(step_elig)
+
+            step_create = WorkflowStep(
+                step_id=f"step_{step_idx+1}",
+                action="create_return_request",
+                agent="return",
+                description="Create return request in DB",
+                depends_on=[f"step_{step_idx}"],
+                verification_required=True,
+            )
+            wf_steps.append(step_create)
+
+            step_verify = WorkflowStep(
+                step_id=f"step_{step_idx+2}",
+                action="verify_return",
+                agent="return",
+                description="Verify return record in PostgreSQL",
+                depends_on=[f"step_{step_idx+1}"],
+            )
+            wf_steps.append(step_verify)
+
+            if "deliver" in msg_lower or "delivery" in msg_lower or "status" in msg_lower or "tell me" in msg_lower:
+                step_status = WorkflowStep(
+                    step_id=f"step_{step_idx+3}",
+                    action="get_delivery_status",
+                    agent="delivery",
+                    description="Check delivery state of order",
+                    depends_on=["step_2"],
+                )
+                wf_steps.append(step_status)
+
+        elif primary == "replacement":
+            step_elig = WorkflowStep(
+                step_id=f"step_{step_idx}",
+                action="check_replacement_eligibility",
+                agent="replacement",
+                description="Check replacement eligibility in PostgreSQL",
+                depends_on=["step_2"],
+            )
+            wf_steps.append(step_elig)
+
+            step_create = WorkflowStep(
+                step_id=f"step_{step_idx+1}",
+                action="create_replacement_request",
+                agent="replacement",
+                description="Create replacement request in DB",
+                depends_on=[f"step_{step_idx}"],
+                verification_required=True,
+            )
+            wf_steps.append(step_create)
+
+            step_verify = WorkflowStep(
+                step_id=f"step_{step_idx+2}",
+                action="verify_replacement",
+                agent="replacement",
+                description="Verify replacement record in PostgreSQL",
+                depends_on=[f"step_{step_idx+1}"],
+            )
+            wf_steps.append(step_verify)
+
+            if "status" in msg_lower or "delivery" in msg_lower or "arrive" in msg_lower or "tell me" in msg_lower:
+                step_status = WorkflowStep(
+                    step_id=f"step_{step_idx+3}",
+                    action="get_replacement_status",
+                    agent="replacement",
+                    description="Retrieve replacement and delivery status",
+                    depends_on=[f"step_{step_idx+2}"],
+                )
+                wf_steps.append(step_status)
+
+        elif primary in ("order", "payment", "delivery", "account"):
+            step_lookup = WorkflowStep(
+                step_id=f"step_{step_idx}",
+                action="lookup",
+                agent=primary,
+                description=f"Execute {primary} agent lookup",
+                depends_on=["step_2"],
+            )
+            wf_steps.append(step_lookup)
+
+        goal_str = f"Resolve {primary} support request for order '{state.order_id or 'unknown'}'"
+        plan = WorkflowPlan(goal=goal_str, steps=wf_steps, max_steps=8, max_replans=1)
+        state.workflow_plan = plan
+
+        state.plan = [
+            ActionItem(agent=s.agent, action=s.action, description=s.description)
+            for s in wf_steps
+            if s.action not in ("policy_retrieval", "check_order")
+        ]
+        if not state.plan:
+            state.plan = [ActionItem(agent=primary or "unknown", action="lookup", description="Execute support query")]
 
     def _execute_plan(self, state: AgentState, db: Session) -> None:
-        """Execute plan items step-by-step with observation and verification."""
+        """Execute plan items step-by-step with dependency checks, observation, and verification."""
+        if not state.workflow_plan:
+            self._create_plan(state)
+
+        plan = state.workflow_plan
         responses: list[str] = []
+        executed_state_changing_actions: set[str] = set()
 
-        for item in state.plan:
-            if state.status == OrchestrationStatus.RESOLVED:
+        for step in plan.steps:
+            if state.status in (OrchestrationStatus.ESCALATED, OrchestrationStatus.NEEDS_CLARIFICATION):
                 break
 
+            # Dependency validation
+            any_dep_failed = any(dep_id in plan.failed_steps for dep_id in step.depends_on)
+            if any_dep_failed:
+                step.status = StepStatus.SKIPPED
+                continue
+
+            # Duplicate action protection for state-changing actions
+            if step.action in ("process_refund", "create_return_request", "create_replacement_request"):
+                if step.action in executed_state_changing_actions:
+                    step.status = StepStatus.SKIPPED
+                    continue
+                executed_state_changing_actions.add(step.action)
+
+            step.status = StepStatus.RUNNING
+            state.current_agent = step.agent
+            state.current_action = step.action
             state.increment_attempt()
-            if state.status == OrchestrationStatus.ESCALATED:
-                break
 
-            state.current_agent = item.agent
-            state.current_action = item.action
-            if state.status != OrchestrationStatus.RESOLVED:
+            if state.status not in (OrchestrationStatus.RESOLVED, OrchestrationStatus.ESCALATED):
                 state.status = OrchestrationStatus.EXECUTING
 
-            # Execute specific domain action
-            if item.agent == "payment" and (item.action.startswith("check_refund") or item.action == "process_refund" or item.action == "verify_refund"):
-                self._execute_refund_step(item, state, db)
-            elif item.agent == "return" and ("return" in item.action):
-                self._execute_return_step(item, state, db)
-            elif item.agent == "replacement" and ("replacement" in item.action):
-                self._execute_replacement_step(item, state, db)
-            elif item.agent in ("order", "payment", "delivery", "account"):
-                self._execute_specialist_step(item, state, db)
-            else:
-                self._execute_unknown_step(item, state, db)
+            # Step Execution Logic
+            if step.action == "policy_retrieval":
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
 
-            item.completed = True
-            state.completed_actions.append(
-                {
-                    "agent": item.agent,
-                    "action": item.action,
-                    "description": item.description,
-                    "status": state.status.value,
-                }
-            )
+            elif step.action == "check_order":
+                if state.order_id:
+                    ord_obj = db.query(Order).filter_by(order_id=state.order_id).first()
+                    if ord_obj:
+                        step.status = StepStatus.COMPLETED
+                        plan.completed_steps.append(step.step_id)
+                    else:
+                        step.status = StepStatus.FAILED
+                        plan.failed_steps.append(step.step_id)
+                        self._escalate(state, db, f"Order '{state.order_id}' was not found in the database.")
+                        break
+                else:
+                    step.status = StepStatus.COMPLETED
+                    plan.completed_steps.append(step.step_id)
+
+            elif step.agent == "payment" and ("refund" in step.action or step.action == "process_refund"):
+                self._execute_refund_step_wf(step, state, db, plan)
+            elif step.agent == "return" and ("return" in step.action):
+                self._execute_return_step_wf(step, state, db, plan)
+            elif step.agent == "replacement" and ("replacement" in step.action):
+                self._execute_replacement_step_wf(step, state, db, plan)
+            elif step.agent == "delivery" and step.action == "get_delivery_status":
+                del_res = run_delivery(state.user_request, db)
+                resp = del_res.get("response", "")
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+                if resp and resp not in responses:
+                    responses.append(resp)
+            elif step.agent in ("order", "payment", "delivery", "account"):
+                self._execute_specialist_step(ActionItem(agent=step.agent, action=step.action, description=step.description), state, db)
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                self._execute_unknown_step(ActionItem(agent=step.agent, action=step.action, description=step.description), state, db)
+
+            state.completed_actions.append({
+                "agent": step.agent,
+                "action": step.action,
+                "description": step.description,
+                "status": step.status.value if isinstance(step.status, StepStatus) else str(step.status),
+            })
+            state.workflow_trace = plan.get_workflow_trace()
 
             if state.final_response and state.final_response not in responses:
                 responses.append(state.final_response)
 
-            # Terminal states break execution loop early
-            if state.status in (
-                OrchestrationStatus.RESOLVED,
-                OrchestrationStatus.NEEDS_CLARIFICATION,
-                OrchestrationStatus.ESCALATED,
-            ):
+            if state.status in (OrchestrationStatus.NEEDS_CLARIFICATION, OrchestrationStatus.ESCALATED):
                 break
 
         if responses:
             state.final_response = "\n\n".join(responses)
 
-
-    def _execute_refund_step(self, item: ActionItem, state: AgentState, db: Session) -> None:
-        """Handle refund workflow steps."""
-        if item.action == "check_refund_eligibility":
+    def _execute_refund_step_wf(self, step: WorkflowStep, state: AgentState, db: Session, plan: WorkflowPlan) -> None:
+        """Handle refund workflow step execution with WorkflowPlan tracking."""
+        if step.action == "check_refund_eligibility":
             res = check_refund_eligibility(state.order_id, db)
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
-
             if not res.get("success") and "not found" in res.get("message", "").lower():
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
                 self._escalate(state, db, res.get("message", f"Order '{state.order_id}' not found."))
                 return
 
-            if not res.get("eligible"):
-                if res.get("reason") == "Refund has already been processed for this order." or res.get("payment_status") == "REFUNDED":
-                    v_res = verify_refund(state.order_id, db)
-                    state.verification_result = v_res
-                    state.status = OrchestrationStatus.RESOLVED
-                    state.final_response = f"Refund for order '{state.order_id}' has already been processed."
-                else:
+            if res.get("eligible") or res.get("already_refunded") or res.get("payment_status") == "REFUNDED":
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
                     state.status = OrchestrationStatus.REPLANNING
                     self._escalate(state, db, res.get("reason", "Order is not eligible for refund."))
 
-        elif item.action == "process_refund":
+        elif step.action == "process_refund":
             res = process_refund(state.order_id, db, reason=state.reason or "Customer requested refund")
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
+            if res.get("success") or res.get("already_refunded") or res.get("processed"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
+                    state.status = OrchestrationStatus.REPLANNING
+                    self._escalate(state, db, res.get("message", "Refund processing failed."))
 
-            if res.get("already_refunded"):
-                v_res = verify_refund(state.order_id, db)
-                state.verification_result = v_res
-                state.status = OrchestrationStatus.RESOLVED
-                state.final_response = res.get("message", f"Refund for order '{state.order_id}' has already been processed.")
-            elif not res.get("success") or not res.get("processed"):
-                self._escalate(state, db, res.get("message", "Refund processing failed."))
-
-        elif item.action == "verify_refund":
+        elif step.action == "verify_refund":
             state.status = OrchestrationStatus.VERIFYING
             v_res = verify_refund(state.order_id, db)
             state.verification_result = v_res
             if v_res.get("success") and v_res.get("status") == "COMPLETED":
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
                 state.status = OrchestrationStatus.RESOLVED
                 amount_str = f"INR {v_res.get('amount')}" if v_res.get("amount") else "amount"
-                state.final_response = (
-                    f"Refund of {amount_str} for order '{state.order_id}' processed successfully. "
-                    f"Refund ID: {v_res.get('refund_id')}."
-                )
+                state.final_response = f"Refund of {amount_str} for order '{state.order_id}' processed successfully. Refund ID: {v_res.get('refund_id')}."
             else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
                 self._escalate(state, db, f"Refund verification failed for order '{state.order_id}'.")
 
-    def _execute_return_step(self, item: ActionItem, state: AgentState, db: Session) -> None:
-        """Handle return workflow steps."""
-        if item.action == "check_return_eligibility":
+        elif step.action == "get_refund_status":
+            v_res = verify_refund(state.order_id, db)
+            if v_res.get("success"):
+                state.final_response = f"Refund of INR {v_res.get('amount')} for order '{state.order_id}' processed successfully. Refund ID: {v_res.get('refund_id')}."
+            step.status = StepStatus.COMPLETED
+            plan.completed_steps.append(step.step_id)
+
+    def _execute_return_step_wf(self, step: WorkflowStep, state: AgentState, db: Session, plan: WorkflowPlan) -> None:
+        """Handle return workflow step execution with WorkflowPlan tracking."""
+        if step.action == "check_return_eligibility":
             res = check_return_eligibility(state.order_id, db)
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
+            if res.get("eligible"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
+                    state.status = OrchestrationStatus.REPLANNING
+                    self._escalate(state, db, res.get("reason", "Order is not eligible for return."))
 
-            if not res.get("success") or not res.get("eligible"):
-                state.status = OrchestrationStatus.REPLANNING
-                self._escalate(state, db, res.get("reason", "Order is not eligible for a product return."))
-
-        elif item.action == "create_return_request":
+        elif step.action == "create_return_request":
             res = create_return_request(
                 order_id=state.order_id,
                 db=db,
                 customer_id=state.customer_id,
-                reason=state.reason or "Customer requested product return",
+                reason=state.reason or "Customer requested return",
             )
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
+            if res.get("success") or res.get("already_exists"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
+                    state.status = OrchestrationStatus.REPLANNING
+                    self._escalate(state, db, res.get("message", "Return creation failed."))
 
-            if res.get("already_exists"):
-                v_res = verify_return(state.order_id, db)
-                state.verification_result = v_res
-                state.status = OrchestrationStatus.RESOLVED
-                state.final_response = res.get("message", f"A return request already exists for order '{state.order_id}'.")
-            elif not res.get("success"):
-                self._escalate(state, db, res.get("message", "Return creation failed."))
-
-        elif item.action == "verify_return":
+        elif step.action == "verify_return":
             state.status = OrchestrationStatus.VERIFYING
             v_res = verify_return(state.order_id, db)
             state.verification_result = v_res
             if v_res.get("success") and v_res.get("status") in ("REQUESTED", "APPROVED", "COMPLETED"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
                 state.status = OrchestrationStatus.RESOLVED
-                state.final_response = (
-                    f"Your return request for order '{state.order_id}' has been successfully registered. "
-                    f"Return ID: {v_res.get('return_id')}, Status: {v_res.get('status')}."
-                )
+                state.final_response = f"Your return request for order '{state.order_id}' has been successfully registered. Return ID: {v_res.get('return_id')}, Status: {v_res.get('status')}."
             else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
                 self._escalate(state, db, f"Return verification failed for order '{state.order_id}'.")
 
-    def _execute_replacement_step(self, item: ActionItem, state: AgentState, db: Session) -> None:
-        """Handle replacement workflow steps."""
-        if item.action == "check_replacement_eligibility":
+    def _execute_replacement_step_wf(self, step: WorkflowStep, state: AgentState, db: Session, plan: WorkflowPlan) -> None:
+        """Handle replacement workflow step execution with WorkflowPlan tracking."""
+        if step.action == "check_replacement_eligibility":
             res = check_replacement_eligibility(state.order_id, db)
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
+            if res.get("eligible"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
+                    state.status = OrchestrationStatus.REPLANNING
+                    self._escalate(state, db, res.get("reason", "Order is not eligible for product replacement."))
 
-            if not res.get("success") or not res.get("eligible"):
-                state.status = OrchestrationStatus.REPLANNING
-                self._escalate(state, db, res.get("reason", "Order is not eligible for product replacement."))
-
-        elif item.action == "create_replacement_request":
+        elif step.action == "create_replacement_request":
             res = create_replacement_request(
                 order_id=state.order_id,
                 db=db,
@@ -644,27 +836,37 @@ class Orchestrator:
             )
             state.tool_result = res
             state.status = OrchestrationStatus.OBSERVING
+            if res.get("success") or res.get("already_exists"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
+            else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
+                if plan.can_replan():
+                    plan.replans += 1
+                    state.status = OrchestrationStatus.REPLANNING
+                    self._escalate(state, db, res.get("message", "Replacement creation failed."))
 
-            if res.get("already_exists"):
-                v_res = verify_replacement(state.order_id, db)
-                state.verification_result = v_res
-                state.status = OrchestrationStatus.RESOLVED
-                state.final_response = res.get("message", f"A replacement request already exists for order '{state.order_id}'.")
-            elif not res.get("success"):
-                self._escalate(state, db, res.get("message", "Replacement creation failed."))
-
-        elif item.action == "verify_replacement":
+        elif step.action == "verify_replacement":
             state.status = OrchestrationStatus.VERIFYING
             v_res = verify_replacement(state.order_id, db)
             state.verification_result = v_res
             if v_res.get("success") and v_res.get("status") in ("REQUESTED", "APPROVED", "COMPLETED"):
+                step.status = StepStatus.COMPLETED
+                plan.completed_steps.append(step.step_id)
                 state.status = OrchestrationStatus.RESOLVED
-                state.final_response = (
-                    f"Your replacement request for order '{state.order_id}' has been successfully registered. "
-                    f"Replacement ID: {v_res.get('replacement_id')}, Status: {v_res.get('status')}."
-                )
+                state.final_response = f"Your replacement request for order '{state.order_id}' has been successfully registered. Replacement ID: {v_res.get('replacement_id')}, Status: {v_res.get('status')}."
             else:
+                step.status = StepStatus.FAILED
+                plan.failed_steps.append(step.step_id)
                 self._escalate(state, db, f"Replacement verification failed for order '{state.order_id}'.")
+
+        elif step.action == "get_replacement_status":
+            v_res = verify_replacement(state.order_id, db)
+            if v_res.get("success"):
+                state.final_response = f"Your replacement request for order '{state.order_id}' has been created successfully as {v_res.get('replacement_id')}. The request is currently in {v_res.get('status')} status."
+            step.status = StepStatus.COMPLETED
+            plan.completed_steps.append(step.step_id)
 
     def _execute_specialist_step(self, item: ActionItem, state: AgentState, db: Session) -> None:
         """Delegate to domain specialist agents (order, payment, delivery, account)."""
@@ -769,13 +971,16 @@ class Orchestrator:
 
     def _build_result(self, state: AgentState) -> dict[str, Any]:
         """Format structured orchestration result."""
+        wf_trace = state.workflow_trace if state.workflow_trace else (state.workflow_plan.get_workflow_trace() if state.workflow_plan else [])
         return {
             "success": state.status == OrchestrationStatus.RESOLVED or state.status == OrchestrationStatus.NEEDS_CLARIFICATION,
-            "status": state.status.value,
+            "status": state.status.value if isinstance(state.status, OrchestrationStatus) else str(state.status),
             "intent": state.intent,
             "order_id": state.order_id,
             "session_id": state.session_id,
             "conversation_context": state.conversation_context.model_dump() if state.conversation_context else None,
+            "workflow_plan": state.workflow_plan.model_dump() if state.workflow_plan else None,
+            "workflow_trace": wf_trace,
             "completed_actions": [a["action"] for a in state.completed_actions],
             "verification": state.verification_result or {"verified": state.status == OrchestrationStatus.RESOLVED},
             "policy_context": state.policy_context.model_dump() if state.policy_context else None,

@@ -31,6 +31,52 @@ class ActionItem(BaseModel):
     completed: bool = False
 
 
+class StepStatus(str, Enum):
+    PENDING = "PENDING"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class WorkflowStep(BaseModel):
+    step_id: str
+    action: str
+    description: str | None = None
+    agent: str
+    status: StepStatus = StepStatus.PENDING
+    depends_on: list[str] = Field(default_factory=list)
+    result: dict[str, Any] | None = None
+    verification_required: bool = False
+
+
+class WorkflowPlan(BaseModel):
+    goal: str
+    steps: list[WorkflowStep] = Field(default_factory=list)
+    current_step: int = 0
+    completed_steps: list[str] = Field(default_factory=list)
+    failed_steps: list[str] = Field(default_factory=list)
+    replans: int = 0
+    max_steps: int = 8
+    max_replans: int = 1
+
+    def can_replan(self) -> bool:
+        """Return True if replan budget (max_replans) has not been exceeded."""
+        return self.replans < self.max_replans
+
+    def get_workflow_trace(self) -> list[dict[str, Any]]:
+        """Return structured step trace for UI / API consumption."""
+        return [
+            {
+                "step": step.action,
+                "status": step.status.value if isinstance(step.status, StepStatus) else str(step.status),
+            }
+            for step in self.steps
+            if step.status != StepStatus.PENDING
+        ]
+
+
 class EscalationCategory(str, Enum):
     INELIGIBLE_TRANSACTION = "INELIGIBLE_TRANSACTION"
     POLICY_COVERAGE_INSUFFICIENT = "POLICY_COVERAGE_INSUFFICIENT"
@@ -170,6 +216,8 @@ class AgentState(BaseModel):
     decision: AgentDecision | None = None
     escalation_context: EscalationContext | None = None
     conversation_context: ConversationContext | None = None
+    workflow_plan: WorkflowPlan | None = None
+    workflow_trace: list[dict[str, Any]] = Field(default_factory=list)
 
     attempt_count: int = 0
     max_attempts: int = 3
@@ -206,6 +254,8 @@ class AgentState(BaseModel):
             "current_agent": self.current_agent,
             "current_action": self.current_action,
             "plan": [action.model_dump() for action in self.plan],
+            "workflow_plan": self.workflow_plan.model_dump() if self.workflow_plan else None,
+            "workflow_trace": self.workflow_trace if self.workflow_trace else (self.workflow_plan.get_workflow_trace() if self.workflow_plan else []),
             "completed_actions": self.completed_actions,
             "tool_result": self.tool_result,
             "verification_result": self.verification_result,

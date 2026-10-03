@@ -21,8 +21,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from knowledge import PolicyRetriever
-from agents.state import AgentState, ActionItem, OrchestrationStatus
+from agents.state import AgentState, ActionItem, AgentDecision, OrchestrationStatus
 from backend.database import SessionLocal
+from backend.models.order import Order
 
 from backend.services.refund_service import (
     check_refund_eligibility,
@@ -134,6 +135,106 @@ class Orchestrator:
     def __init__(self, db: Session | None = None) -> None:
         self.db = db
 
+    def _make_decision(self, state: AgentState, db: Session) -> AgentDecision:
+        """
+        Synthesize Goal, Policy Context, and Transactional Facts into an AgentDecision.
+        """
+        intent = state.intent
+        order_id = state.order_id
+        customer_id = state.customer_id
+        policy_ctx = state.policy_context
+
+        display_intent = "refund" if "refund" in state.user_request.lower() else intent
+        goal = f"Resolve {display_intent} support request"
+        if order_id:
+            goal = f"Process {display_intent} for order {order_id}"
+        elif customer_id:
+            goal = f"Manage account request for customer {customer_id}"
+
+
+        policy_supported = True
+        policy_confidence = policy_ctx.retrieval_confidence if policy_ctx else 0.0
+        if not policy_ctx or policy_ctx.requires_policy_review or not policy_ctx.top_policy:
+            policy_supported = False
+
+        order_obj = None
+        order_status = None
+        payment_status = None
+        if order_id:
+            order_obj = db.query(Order).filter_by(order_id=order_id).first()
+            if order_obj:
+                order_status = (order_obj.order_status or "").upper()
+                if order_obj.payment:
+                    payment_status = (order_obj.payment.payment_status or "").upper()
+
+
+        requires_clarify = False
+        requires_escalate = False
+        selected_agent = intent
+        selected_action = f"process_{intent}" if intent in ("refund", "return", "replacement") else "lookup"
+        rationale = ""
+
+        if intent in ("refund", "return", "replacement", "order", "payment", "delivery") and not order_id:
+            requires_clarify = True
+            selected_action = "clarify"
+            rationale = f"Policy coverage is sufficient, but order ID is missing for {display_intent} request."
+
+        elif intent == "account" and not customer_id:
+            requires_clarify = True
+            selected_action = "clarify"
+            rationale = "Policy coverage is sufficient, but customer ID is missing for account request."
+        elif intent == "unknown" or (not policy_supported and policy_ctx and policy_ctx.requires_policy_review):
+            requires_clarify = True
+            selected_agent = "unknown"
+            selected_action = "clarify"
+            rationale = "Policy coverage is insufficient for request; clarification is required."
+        elif order_id and not order_obj:
+            selected_action = "check_eligibility"
+            rationale = f"Order {order_id} not found in database; verification required."
+        else:
+            is_refund = intent == "refund" or "refund" in state.user_request.lower()
+            if is_refund:
+                selected_agent = "payment"
+                selected_action = "check_refund_eligibility"
+                if order_status == "CANCELLED" and payment_status in ("PAID", "SUCCESS"):
+                    rationale = f"Refund policy matched and order {order_id} is CANCELLED with {payment_status} payment status."
+
+                elif payment_status == "REFUNDED":
+                    rationale = f"Refund policy matched; order {order_id} has already been refunded."
+                else:
+                    rationale = f"Refund policy matched, but order {order_id} status is {order_status or 'UNKNOWN'}."
+            elif intent == "return":
+                selected_agent = "return"
+                selected_action = "check_return_eligibility"
+                if order_status == "DELIVERED":
+                    rationale = f"Return policy matched and order {order_id} is DELIVERED."
+                else:
+                    rationale = f"Return policy matched, but order {order_id} is not delivered (status: {order_status or 'UNKNOWN'})."
+            elif intent == "replacement":
+                selected_agent = "replacement"
+                selected_action = "check_replacement_eligibility"
+                if order_status == "DELIVERED":
+                    rationale = f"Replacement policy matched and order {order_id} is DELIVERED."
+                else:
+                    rationale = f"Replacement policy matched, but order {order_id} is not delivered (status: {order_status or 'UNKNOWN'})."
+            else:
+                selected_action = "lookup"
+                rationale = f"{intent.capitalize()} policy matched for order {order_id or 'general inquiry'}."
+
+
+        return AgentDecision(
+            intent=intent,
+            goal=goal,
+            selected_agent=selected_agent,
+            selected_action=selected_action,
+            rationale=rationale,
+            policy_supported=policy_supported,
+            policy_confidence=policy_confidence,
+            transactional_check_required=bool(order_id),
+            requires_clarification=requires_clarify,
+            requires_escalation=requires_escalate,
+        )
+
     def run(self, user_message: str, db: Session | None = None) -> dict[str, Any]:
         """
         Execute full agentic workflow for user request.
@@ -163,29 +264,27 @@ class Orchestrator:
             policy_ctx = PolicyRetriever.retrieve_policy(user_message)
             state.policy_context = policy_ctx
 
-            # Handle unrelated query / low confidence without policy hallucination or DB mutation
-            if state.intent == "unknown" and policy_ctx.requires_policy_review:
+            # 4. Agent Decision Stage
+            state.status = OrchestrationStatus.DECIDING
+            decision = self._make_decision(state, active_db)
+            state.decision = decision
+
+            if decision.requires_clarification:
                 state.status = OrchestrationStatus.NEEDS_CLARIFICATION
-                state.final_response = (
-                    "I can currently help with orders, payments, deliveries, "
-                    "returns, replacements, and account queries. Could you please provide more details "
-                    "about your issue?"
-                )
+                if state.intent in ("refund", "return", "replacement", "order", "payment", "delivery") and not state.order_id:
+                    state.final_response = f"Please provide your order ID (for example, ORD005) so I can look into your {state.intent} request."
+                elif state.intent == "account" and not state.customer_id:
+                    state.final_response = "Please provide your customer ID (for example, C101) so I can look up your account."
+                else:
+                    state.final_response = (
+                        "I can currently help with orders, payments, deliveries, "
+                        "returns, replacements, and account queries. Could you please provide more details "
+                        "about your issue?"
+                    )
                 return self._build_result(state)
 
-            # 4. Required Information Check
-            if state.intent in ("refund", "return", "replacement", "order", "payment", "delivery") and not state.order_id:
-                state.status = OrchestrationStatus.NEEDS_CLARIFICATION
-                state.final_response = (
-                    f"Please provide your order ID (for example, ORD005) so I can look into your {state.intent} request."
-                )
-                return self._build_result(state)
-
-            if state.intent == "account" and not state.customer_id:
-                state.status = OrchestrationStatus.NEEDS_CLARIFICATION
-                state.final_response = (
-                    "Please provide your customer ID (for example, C101) so I can look up your account."
-                )
+            if decision.requires_escalation:
+                self._escalate(state, active_db, decision.rationale)
                 return self._build_result(state)
 
             # 5. Plan Creation
@@ -204,10 +303,10 @@ class Orchestrator:
 
             return self._build_result(state)
 
-
         finally:
             if local_session and active_db:
                 active_db.close()
+
 
     def _create_plan(self, state: AgentState) -> None:
         """Generate structured action plan based on state intent(s)."""
@@ -500,9 +599,11 @@ class Orchestrator:
             "completed_actions": [a["action"] for a in state.completed_actions],
             "verification": state.verification_result or {"verified": state.status == OrchestrationStatus.RESOLVED},
             "policy_context": state.policy_context.model_dump() if state.policy_context else None,
+            "decision": state.decision.model_dump() if state.decision else None,
             "final_response": state.final_response,
             "ticket_id": state.ticket_id,
             "escalation_reason": state.escalation_reason,
             "state": state.to_dict(),
         }
+
 

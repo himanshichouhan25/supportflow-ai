@@ -13,6 +13,7 @@ class OrchestrationStatus(str, Enum):
     RECEIVED = "RECEIVED"
     PLANNING = "PLANNING"
     POLICY_RETRIEVAL = "POLICY_RETRIEVAL"
+    DECIDING = "DECIDING"
     EXECUTING = "EXECUTING"
     OBSERVING = "OBSERVING"
     VERIFYING = "VERIFYING"
@@ -28,6 +29,19 @@ class ActionItem(BaseModel):
     action: str
     description: str | None = None
     completed: bool = False
+
+
+class AgentDecision(BaseModel):
+    intent: str
+    goal: str
+    selected_agent: str
+    selected_action: str
+    rationale: str
+    policy_supported: bool = True
+    policy_confidence: float = 1.0
+    transactional_check_required: bool = True
+    requires_clarification: bool = False
+    requires_escalation: bool = False
 
 
 class AgentState(BaseModel):
@@ -49,6 +63,7 @@ class AgentState(BaseModel):
     tool_result: dict[str, Any] | None = None
     verification_result: dict[str, Any] | None = None
     policy_context: PolicyContext | None = None
+    decision: AgentDecision | None = None
 
     attempt_count: int = 0
     max_attempts: int = 3
@@ -88,6 +103,7 @@ class AgentState(BaseModel):
             "tool_result": self.tool_result,
             "verification_result": self.verification_result,
             "policy_context": self.policy_context.model_dump() if self.policy_context else None,
+            "decision": self.decision.model_dump() if self.decision else None,
             "attempt_count": self.attempt_count,
             "max_attempts": self.max_attempts,
             "status": self.status.value if isinstance(self.status, OrchestrationStatus) else str(self.status),
@@ -95,4 +111,5 @@ class AgentState(BaseModel):
             "ticket_id": self.ticket_id,
             "final_response": self.final_response,
         }
+
 

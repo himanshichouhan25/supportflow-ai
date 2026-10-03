@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.schemas.return_request import ReturnCreate
-from tools.return_tool import (
+from backend.services.return_service import (
     check_return_eligibility,
     create_return_request,
     verify_return,
 )
+
 
 router = APIRouter(prefix="/api/returns", tags=["Returns"])
 

@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.schemas.replacement import ReplacementCreate
-from tools.replacement_tool import (
+from backend.services.replacement_service import (
     check_replacement_eligibility,
     create_replacement_request,
     verify_replacement,
 )
+
 
 router = APIRouter(prefix="/api/replacements", tags=["Replacements"])
 
